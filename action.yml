@@ -1,0 +1,154 @@
+name: web-openscad-editor
+description: Generate a web OpenSCAD editor export
+author: yawkat
+
+inputs:
+  scad:
+    description: Input SCAD file
+    required: true
+  output:
+    description: Output directory
+    required: false
+    default: out
+
+  openscad-version:
+    description: OpenSCAD snapshot version (e.g. 2026.01.19)
+    required: false
+    default: 2026.01.19
+  openscad-appimage-sha256:
+    description: Optional sha256 for OpenSCAD AppImage
+    required: false
+  openscad-wasm-zip-sha256:
+    description: Optional sha256 for OpenSCAD WebAssembly web zip
+    required: false
+
+  project-name:
+    description: Project name shown in the web export
+    required: false
+  project-uri:
+    description: Project URI shown in the web export
+    required: false
+  export-filename-prefix:
+    description: Prefix for exported filenames
+    required: false
+
+  uv-run-args:
+    description: Extra args appended after `python generate.py` (space-separated)
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+
+    - name: Install OpenSCAD snapshot
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        sudo apt-get update
+        sudo apt-get install -y xvfb
+
+        version='${{ inputs.openscad-version }}'
+        base='https://files.openscad.org/snapshots'
+        appimage="OpenSCAD-${version}-x86_64.AppImage"
+        wasmzip="OpenSCAD-${version}-WebAssembly-web.zip"
+
+        mkdir -p .openscad-cache
+        cd .openscad-cache
+
+        if [ ! -f "$appimage" ]; then
+          curl -fsSLo "$appimage" "$base/$appimage"
+        fi
+        if [ -n '${{ inputs.openscad-appimage-sha256 }}' ]; then
+          echo "${{ inputs.openscad-appimage-sha256 }}  $appimage" | sha256sum -c -
+        fi
+
+        if [ ! -f "$wasmzip" ]; then
+          curl -fsSLo "$wasmzip" "$base/$wasmzip"
+        fi
+        if [ -n '${{ inputs.openscad-wasm-zip-sha256 }}' ]; then
+          echo "${{ inputs.openscad-wasm-zip-sha256 }}  $wasmzip" | sha256sum -c -
+        fi
+
+        chmod +x "$appimage"
+
+        if [ ! -d squashfs-root ]; then
+          "./$appimage" --appimage-extract >/dev/null
+        fi
+
+        cat > openscad <<'EOF'
+        #!/usr/bin/env bash
+        set -euo pipefail
+        DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if command -v xvfb-run >/dev/null 2>&1; then
+          exec xvfb-run -a "$DIR/squashfs-root/AppRun" "$@"
+        else
+          exec "$DIR/squashfs-root/AppRun" "$@"
+        fi
+        EOF
+        chmod +x openscad
+
+        mkdir -p openscad-wasm
+        if [ ! -f openscad-wasm/openscad.js ] || [ ! -f openscad-wasm/openscad.wasm ]; then
+          rm -rf openscad-wasm
+          mkdir -p openscad-wasm
+          unzip -q -o "$wasmzip" -d openscad-wasm-tmp
+          if [ -f openscad-wasm-tmp/openscad.js ] && [ -f openscad-wasm-tmp/openscad.wasm ]; then
+            mv openscad-wasm-tmp/openscad.js openscad-wasm/
+            mv openscad-wasm-tmp/openscad.wasm openscad-wasm/
+          else
+            echo "Unexpected WASM zip layout: $wasmzip" >&2
+            find openscad-wasm-tmp -maxdepth 2 -type f -print >&2
+            exit 1
+          fi
+          rm -rf openscad-wasm-tmp
+        fi
+
+        echo "$PWD" >> "$GITHUB_PATH"
+        echo "OPENSCAD_WASM_DIR=$PWD/openscad-wasm" >> "$GITHUB_ENV"
+
+    - name: Install Python dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        uv sync --frozen
+
+    - name: Generate web export
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        args=(
+          --scad "${{ inputs.scad }}"
+          --output "${{ inputs.output }}"
+          --openscad-wasm "$OPENSCAD_WASM_DIR"
+        )
+        if [ -n '${{ inputs.project-name }}' ]; then
+          args+=(--project-name '${{ inputs.project-name }}')
+        fi
+        if [ -n '${{ inputs.project-uri }}' ]; then
+          args+=(--project-uri '${{ inputs.project-uri }}')
+        fi
+        if [ -n '${{ inputs.export-filename-prefix }}' ]; then
+          args+=(--export-filename-prefix '${{ inputs.export-filename-prefix }}')
+        fi
+
+        extra='${{ inputs.uv-run-args }}'
+        if [ -n "$extra" ]; then
+          # shellcheck disable=SC2206
+          extra_args=( $extra )
+        else
+          extra_args=()
+        fi
+
+        uv run python generate.py "${args[@]}" "${extra_args[@]}"

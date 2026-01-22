@@ -13,17 +13,37 @@ import shutil
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scad", type=str, required=True, help="Input SCAD file")
-    parser.add_argument("--output", type=str, required=True, help="Output directory")
+    parser.add_argument(
+        "--output",
+        type=str,
+        required=False,
+        default="out",
+        help="Output directory (default: out)",
+    )
     parser.add_argument(
         "--openscad-wasm",
         type=str,
         required=True,
         help="Path to OpenSCAD WebAssembly library",
     )
-    parser.add_argument("--project-name", type=str, required=False, default="PROJECT")
-    parser.add_argument("--project-uri", type=str, required=False, default="https://example.com/")
-    parser.add_argument("--export-filename-prefix", type=str, required=False, default="web-openscad-editor-example-export")
+    parser.add_argument("--project-name", type=str, required=False, default=None)
+    parser.add_argument("--project-uri", type=str, required=False, default=None)
+    parser.add_argument(
+        "--export-filename-prefix", type=str, required=False, default=None
+    )
     args = parser.parse_args()
+
+    gh_repo = os.environ.get("GITHUB_REPOSITORY")
+    gh_repo_name = gh_repo.split("/", 1)[1] if gh_repo and "/" in gh_repo else gh_repo
+    gh_server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    gh_repo_uri = f"{gh_server_url}/{gh_repo}" if gh_repo else None
+
+    if args.project_name is None:
+        args.project_name = gh_repo_name or "PROJECT"
+    if args.project_uri is None:
+        args.project_uri = gh_repo_uri or "https://example.com/"
+    if args.export_filename_prefix is None:
+        args.export_filename_prefix = gh_repo_name or "openscad-export"
 
     def run_openscad(*params: str):
         subprocess.run(["openscad"] + list(params), check=True)
@@ -45,7 +65,7 @@ def main():
         "metadata": metadata,
         "fs": {k: base64.b64encode(v).decode("ascii") for k, v in fs.items()},
         "input": args.scad,
-        "args": args
+        "args": args,
     }
     with open(os.path.join(args.output, "index.html"), "w") as f:
         f.write(j2env.get_template("index.html.jinja2").render(**variables))

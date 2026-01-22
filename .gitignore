@@ -14,3 +14,10 @@ wheels/
 
 out/
 openscad-wasm/
+
+# GitHub Action download cache
+.openscad-cache/
+
+# Local OpenSCAD downloads
+OpenSCAD-*-WebAssembly-*.zip
+OpenSCAD-*-x86_64.AppImage

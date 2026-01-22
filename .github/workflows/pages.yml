@@ -1,0 +1,66 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME }}" ]; then
+            echo "Missing vars.CLOUDFLARE_PAGES_PROJECT_NAME" >&2
+            exit 1
+          fi
+
+      - name: Generate site
+        uses: ./
+        with:
+          scad: test.scad
+          output: out
+
+      - name: Publish (main)
+        if: github.event_name != 'pull_request'
+        uses: cloudflare/wrangler-action@v3
+        id: cf_publish
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            pages deploy out/
+            --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME }}
+            --branch=main
+
+      - name: Publish (PR preview)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: cloudflare/wrangler-action@v3
+        id: cf_publish_pr
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            pages deploy out/
+            --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME }}
+            --branch=pr-${{ github.event.pull_request.number }}
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.cf_publish_pr.outputs.deployment-url
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          comment-tag: deployment
+          message: ":rocket: Preview deployed to ${{ steps.cf_publish_pr.outputs.deployment-url }}"
