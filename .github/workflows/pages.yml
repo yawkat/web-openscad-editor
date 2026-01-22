@@ -36,10 +36,10 @@ jobs:
             --project-name=web-openscad-editor-yawk-at
             --branch=main
       - name: Check PR
-        uses: 8BitJonny/gh-get-current-pr@3.0.0
+        uses: 8BitJonny/gh-get-current-pr@4.0.0
         id: pr
       - name: Comment on PR
-        if: steps.pr.outputs.pr_found
+        if: steps.pr.outputs.pr_found == 'true'
         uses: thollander/actions-comment-pull-request@v3
         with:
           comment-tag: deployment
