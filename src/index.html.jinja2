@@ -88,6 +88,152 @@
         };
         const currentCustomization = JSON.parse(JSON.stringify(defaultCustomization));
 
+        function jsonEqual(a, b) {
+            if (a === undefined && b === undefined) {
+                return true;
+            }
+            return JSON.stringify(a) === JSON.stringify(b);
+        }
+
+        const DEBUG_CUSTOMIZATION_HASH = false;
+
+        function computeChangedCustomization() {
+            const changed = {};
+            for (const [k, defaultValue] of Object.entries(defaultCustomization)) {
+                if (!jsonEqual(currentCustomization[k], defaultValue)) {
+                    changed[k] = currentCustomization[k];
+                }
+            }
+            return changed;
+        }
+
+        function resetCurrentCustomizationToDefault() {
+            for (const [k, v] of Object.entries(defaultCustomization)) {
+                currentCustomization[k] = JSON.parse(JSON.stringify(v));
+            }
+        }
+
+        function base64EncodeUtf8(text) {
+            const bytes = new TextEncoder().encode(text);
+            let binary = "";
+            for (const b of bytes) {
+                binary += String.fromCharCode(b);
+            }
+            return btoa(binary);
+        }
+
+        function base64DecodeUtf8(text) {
+            const binary = atob(text);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return new TextDecoder().decode(bytes);
+        }
+
+        function updateUrlFromCustomization() {
+            const changed = computeChangedCustomization();
+            const json = Object.keys(changed).length === 0 ? "" : JSON.stringify(changed);
+            // URL hash must stay URL-safe even though we store base64.
+            const hash = json === "" ? "" : encodeURIComponent(base64EncodeUtf8(json));
+            const url = new URL(window.location.href);
+            url.hash = hash === "" ? "" : "#" + hash;
+
+            if (url.href === window.location.href) {
+                return;
+            }
+
+            if (DEBUG_CUSTOMIZATION_HASH) {
+                console.log("updateUrlFromCustomization", {changed, hash: url.hash});
+            }
+
+            navigation.navigate(url.href, {
+                history: "replace",
+                state: navigation.currentEntry.getState() ?? null,
+                // Used to avoid re-rendering on purely programmatic URL sync.
+                info: {type: "customization-sync"},
+            });
+        }
+
+        function applyCustomizationToInputs() {
+            for (const input of document.querySelectorAll(".customizer")) {
+                const name = input.getAttribute("attr-name");
+                const index = input.getAttribute("attr-index");
+                const value = index !== null ? currentCustomization?.[name]?.[index] : currentCustomization?.[name];
+                if (value === undefined) {
+                    continue;
+                }
+
+                if (input.type === "checkbox") {
+                    input.checked = !!value;
+                } else if (input.type === "select-one") {
+                    // Try to preserve the exact option value string (e.g. "1.0" vs "1").
+                    let found = false;
+                    for (const option of input.options) {
+                        try {
+                            if (jsonEqual(JSON.parse(option.value), value)) {
+                                input.value = option.value;
+                                found = true;
+                                break;
+                            }
+                        } catch (e) {
+                            // Ignore unparsable option values.
+                        }
+                    }
+                    if (!found) {
+                        if (DEBUG_CUSTOMIZATION_HASH) {
+                            console.warn("No matching <option> for value", {name, value});
+                        }
+                        input.value = JSON.stringify(value);
+                    }
+                } else {
+                    input.value = String(value);
+                }
+            }
+        }
+
+        function restoreCustomizationFromHash(hashString, {normalizeUrl = false} = {}) {
+            resetCurrentCustomizationToDefault();
+            if (!hashString || hashString.length <= 1) {
+                applyCustomizationToInputs();
+                if (normalizeUrl) {
+                    updateUrlFromCustomization();
+                }
+                return;
+            }
+
+            let customizationFromUrl;
+            try {
+                customizationFromUrl = JSON.parse(base64DecodeUtf8(decodeURIComponent(hashString.slice(1))));
+            } catch (e) {
+                console.warn("Failed to parse customization from URL hash", e);
+                applyCustomizationToInputs();
+                if (normalizeUrl) {
+                    updateUrlFromCustomization();
+                }
+                return;
+            }
+
+            if (!customizationFromUrl || typeof customizationFromUrl !== "object" || Array.isArray(customizationFromUrl)) {
+                applyCustomizationToInputs();
+                if (normalizeUrl) {
+                    updateUrlFromCustomization();
+                }
+                return;
+            }
+
+            for (const [k, v] of Object.entries(customizationFromUrl)) {
+                if (k in defaultCustomization) {
+                    currentCustomization[k] = v;
+                }
+            }
+
+            applyCustomizationToInputs();
+            if (normalizeUrl) {
+                updateUrlFromCustomization();
+            }
+        }
+
         for (const input of document.querySelectorAll(".customizer")) {
             const name = input.getAttribute("attr-name");
             const index = input.getAttribute("attr-index");
@@ -97,6 +243,8 @@
                     value = this.checked;
                 } else if (this.type === "select-one") {
                     value = JSON.parse(this.value);
+                } else if (this.type === "number") {
+                    value = this.valueAsNumber;
                 } else {
                     value = this.value;
                 }
@@ -105,6 +253,8 @@
                 } else {
                     currentCustomization[name] = value;
                 }
+
+                updateUrlFromCustomization();
             });
         }
 
@@ -124,7 +274,39 @@
             worker.postMessage({type: "render", customization: currentCustomization});
         }
 
-        startRender();
+        navigation.addEventListener("navigate", (event) => {
+            if (!event.canIntercept) {
+                return;
+            }
+
+            const destination = new URL(event.destination.url);
+            const current = new URL(window.location.href);
+            const isSameDocument = destination.origin === current.origin &&
+                destination.pathname === current.pathname &&
+                destination.search === current.search;
+            if (!isSameDocument) {
+                return;
+            }
+
+            // Prevent the browser from doing default hash scrolling/focus reset: our hash isn't an anchor.
+            event.intercept({
+                scroll: "manual",
+                focusReset: "manual",
+                handler: async () => {
+                    if (event.info && event.info.type === "customization-sync") {
+                        return;
+                    }
+
+                    restoreCustomizationFromHash(destination.hash);
+                    startRender();
+                },
+            });
+        });
+
+        window.addEventListener("load", () => {
+            restoreCustomizationFromHash(window.location.hash, {normalizeUrl: true});
+            startRender();
+        });
         renderButton.addEventListener("click", function () {
             if (!this.disabled) {
                 startRender();
@@ -152,7 +334,7 @@
     </div>
 </div>
 <div id="pane-right" class="row">
-    <p>This is the model generator for <a href="{{ args.project_uri }}">{{ args.project_name }}</a>.</p>
+    <p>This is the model generator for <a href="{{ args.project_uri }}">{{ args.project_name }}</a>. Any changes you make are saved in the URL, so you can share that URL or create a bookmark to keep those changes around.</p>
     {% set state = namespace(current_group=None) %}
     {% for param in metadata["parameters"] %}
         {% if param['group'] != state.current_group %}
