@@ -119,19 +119,35 @@ runs:
         echo "OPENSCAD_WASM_DIR=$PWD/openscad-wasm" >> "$GITHUB_ENV"
 
     - name: Install Python dependencies
+      working-directory: ${{ github.action_path }}
       shell: bash
       run: |
         set -euo pipefail
         uv sync --frozen
 
     - name: Generate web export
+      working-directory: ${{ github.action_path }}
       shell: bash
       run: |
         set -euo pipefail
 
+        scad='${{ inputs.scad }}'
+        if [[ "$scad" = /* ]]; then
+          scad_path="$scad"
+        else
+          scad_path="$GITHUB_WORKSPACE/$scad"
+        fi
+
+        out='${{ inputs.output }}'
+        if [[ "$out" = /* ]]; then
+          out_path="$out"
+        else
+          out_path="$GITHUB_WORKSPACE/$out"
+        fi
+
         args=(
-          --scad "${{ inputs.scad }}"
-          --output "${{ inputs.output }}"
+          --scad "$scad_path"
+          --output "$out_path"
           --openscad-wasm "$OPENSCAD_WASM_DIR"
         )
         if [ -n '${{ inputs.project-name }}' ]; then
