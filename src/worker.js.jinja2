@@ -40,6 +40,16 @@ async function stlBytesToGlb(stlBytes) {
     const scene = new THREE.Scene()
     scene.add(mesh)
 
+    // Add a few basic lights so the exported GLB shades nicely even without an HDR environment.
+    const lightA = new THREE.DirectionalLight(0xD60270, 5)
+    lightA.position.set(1000, 1000, 1000)
+    scene.add(lightA)
+    lightA.lookAt(0, 0, 0)
+    const lightB = new THREE.DirectionalLight(0x0038A8, 5)
+    lightB.position.set(-1000, 1000, 1000)
+    lightB.lookAt(0, 0, 0)
+    scene.add(lightB)
+
     return await new Promise((resolve, reject) => {
         const exporter = new GLTFExporter()
         exporter.parse(
