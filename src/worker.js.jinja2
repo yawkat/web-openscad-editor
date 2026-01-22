@@ -1,0 +1,124 @@
+import OpenSCAD from "./openscad-wasm/openscad.js"
+import * as THREE from "https://esm.sh/three@0.160.0"
+import { STLLoader } from "https://esm.sh/three@0.160.0/examples/jsm/loaders/STLLoader.js"
+import { GLTFExporter } from "https://esm.sh/three@0.160.0/examples/jsm/exporters/GLTFExporter.js"
+
+console.log("Worker started")
+
+let runQueue = Promise.resolve()
+
+function base64ToUint8Array(base64) {
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+    }
+    return bytes
+}
+
+function uint8ArrayToArrayBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+}
+
+async function stlBytesToGlb(stlBytes) {
+    const geometry = new STLLoader().parse(uint8ArrayToArrayBuffer(stlBytes))
+    if (!geometry.getAttribute("normal")) {
+        geometry.computeVertexNormals()
+    }
+
+    const material = new THREE.MeshStandardMaterial({
+        color: 0x9aa3ad,
+        metalness: 0.05,
+        roughness: 0.9,
+        flatShading: true,
+        vertexColors: geometry.hasAttribute("color"),
+    })
+    const mesh = new THREE.Mesh(geometry, material)
+    // OpenSCAD uses mm; glTF uses meters.
+    mesh.scale.setScalar(0.001)
+
+    const scene = new THREE.Scene()
+    scene.add(mesh)
+
+    return await new Promise((resolve, reject) => {
+        const exporter = new GLTFExporter()
+        exporter.parse(
+            scene,
+            (result) => {
+                if (result instanceof ArrayBuffer) {
+                    resolve(result)
+                } else {
+                    reject(new Error("Expected binary glTF (ArrayBuffer)"))
+                }
+            },
+            (error) => reject(error),
+            { binary: true },
+        )
+    })
+}
+
+async function renderOnce(customization) {
+    const instance = await OpenSCAD({
+        noInitialRun: true,
+        print: console.log,
+        printErr: console.log,
+    })
+
+    {% for k, v in fs.items() %}
+    {
+        const data = base64ToUint8Array("{{ v }}")
+        console.log("Loading {{ k }} (" + data.length + " bytes)")
+        const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
+        if (parent) {
+            instance.FS.mkdirTree(parent)
+        }
+        instance.FS.writeFile("{{ k }}", data)
+    }
+    {% endfor %}
+
+    const stringifiedParameters = {};
+    for (const [k, v] of Object.entries(customization)) {
+        stringifiedParameters[k] = JSON.stringify(v);
+    }
+    console.log("Parameters: ", stringifiedParameters);
+    instance.FS.writeFile("/parameters.json", JSON.stringify({
+        fileFormatVersion: 1,
+        parameterSets: {
+            single: stringifiedParameters
+        }
+    }))
+
+    const output = "output.stl"
+    instance.callMain(["{{ input }}", "-o", output, "--export-format=binstl", "-p", "/parameters.json", "-P", "single"])
+    const stlBytes = instance.FS.readFile(output)
+
+    const glb = await stlBytesToGlb(stlBytes)
+    self.postMessage({
+        type: "ok",
+        glb: glb,
+        stl: stlBytes
+    })
+}
+
+self.addEventListener("message", (event) => {
+    const msg = event && event.data
+    if (!msg || typeof msg !== "object") {
+        return
+    }
+
+    // Serialize OpenSCAD runs to avoid concurrent FS/wasm access.
+    runQueue = runQueue.then(async () => {
+        if (msg.type !== "render") {
+            return
+        }
+        await renderOnce(msg.customization)
+    })
+    runQueue.catch((e) => {
+        console.error(e);
+        self.postMessage({
+            type: "error",
+            error: String(e && e.message ? e.message : e),
+            stack: String(e && e.stack ? e.stack : ""),
+        })
+    })
+})

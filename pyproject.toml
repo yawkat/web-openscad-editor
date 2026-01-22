@@ -1,0 +1,9 @@
+[project]
+name = "web-openscad-editor"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "jinja2>=3.1.6",
+    "pytest>=9.0.2",
+]

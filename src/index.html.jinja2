@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ args.project_name }} Generator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+    <style>
+        #pane-left {
+            position: absolute;
+            height: 100%;
+            width: 60%;
+        }
+        #controls {
+            position: absolute;
+            padding: 1em;
+            top: 0;
+        }
+        #model {
+            height: 100%;
+            width: 100%;
+        }
+        #pane-right {
+            position: absolute;
+            right: 0;
+            height: 100%;
+            width: 40%;
+            overflow: scroll;
+            padding-right: 1em;
+        }
+        @media only screen and (max-width: 992px) {
+            #pane-left {
+                position: relative;
+                height: auto;
+                width: 100vw;
+            }
+            #controls {
+                position: relative;
+            }
+            #model {
+                height: 100vh;
+                width: 100vw;
+            }
+            #pane-right {
+                position: relative;
+                height: auto;
+                width: 100%;
+                overflow: auto;
+            }
+        }
+    </style>
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
+    <script type="module">
+        const renderButton = document.getElementById("render");
+        const renderState = document.getElementById("render-state");
+        const downloadStlButton = document.getElementById("download-stl");
+        const worker = new Worker("./worker.js", {type: "module"})
+        worker.addEventListener("error", (event) => {
+            console.error("Worker script error", event)
+        })
+        worker.addEventListener("messageerror", (event) => {
+            console.error("Worker message error", event)
+        })
+        let lastResult = null;
+        worker.addEventListener("message", (event) => {
+            if (!event.data || typeof event.data !== "object") {
+                return;
+            }
+            if (event.data.type === "ok") {
+                lastResult = event.data;
+                document.getElementById("model").src = URL.createObjectURL(new Blob([event.data.glb], {type: "model/gltf-binary"}));
+                setRendering(false);
+            }
+            if (event.data.type === "error") {
+                console.error("Worker error", event.data);
+                setRendering(false);
+            }
+        });
+
+        const defaultCustomization = {
+            {% for param in metadata["parameters"] -%}
+                "{{ param["name"] }}":
+                {%- if param["type"] == "boolean" %}{% if param["initial"] %}true{% else %}false{% endif %}
+                {%- elif param["type"] == "string" %}"{{ param["initial"] }}"
+                {%- else %}{{ param["initial"] }}{% endif %},
+            {% endfor %}
+        };
+        const currentCustomization = JSON.parse(JSON.stringify(defaultCustomization));
+
+        for (const input of document.querySelectorAll(".customizer")) {
+            const name = input.getAttribute("attr-name");
+            const index = input.getAttribute("attr-index");
+            input.addEventListener("change", function () {
+                let value;
+                if (this.type === "checkbox") {
+                    value = this.checked;
+                } else if (this.type === "select-one") {
+                    value = JSON.parse(this.value);
+                } else {
+                    value = this.value;
+                }
+                if (index !== null) {
+                    currentCustomization[name][index] = value;
+                } else {
+                    currentCustomization[name] = value;
+                }
+            });
+        }
+
+        function setRendering(rendering) {
+            renderButton.disabled = rendering;
+            downloadStlButton.disabled = rendering;
+            if (rendering) {
+                lastResult = null;
+                renderState.classList.remove("d-none");
+            } else {
+                renderState.classList.add("d-none");
+            }
+        }
+
+        function startRender() {
+            setRendering(true);
+            worker.postMessage({type: "render", customization: currentCustomization});
+        }
+
+        startRender();
+        renderButton.addEventListener("click", function () {
+            if (!this.disabled) {
+                startRender();
+            }
+        });
+        downloadStlButton.addEventListener("click", function () {
+            if (lastResult != null) {
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(new Blob([lastResult.stl], {type: "application/octet-stream"}));
+                link.download = "{{ args.export_filename_prefix }}.stl";
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+            }
+        });
+    </script>
+</head>
+<body>
+<div id="pane-left">
+    <model-viewer id="model" camera-controls interaction-prompt="none"></model-viewer>
+    <div id="controls">
+        <button id="render" type="button" class="btn btn-primary">Render<span id="render-state" class="d-none">ing… <span
+                class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></button>
+        <button id="download-stl" type="button" class="btn btn-secondary">Save STL</button>
+    </div>
+</div>
+<div id="pane-right" class="row">
+    <p>This is the model generator for <a href="{{ args.project_uri }}">{{ args.project_name }}</a>.</p>
+    {% set state = namespace(current_group=None) %}
+    {% for param in metadata["parameters"] %}
+        {% if param['group'] != state.current_group %}
+            {% set state.current_group = param['group'] %}
+            <h3>{{ param['group'] }}</h3>
+        {% endif %}
+        {% set pid = "parameter_" + param['name'] %}
+        <div class="col-6 text-end mb-2">
+            <label for="{{ pid }}">{{ param['name'].replace('_', ' ') }}<br><span
+                    class="form-text">{{ param['caption'] }}</span></label>
+        </div>
+        <div class="col-6">
+            {% if param['type'] == 'number' and param['initial'] is iterable %}
+                <div class="input-group">
+                    {% for initial in param['initial'] %}
+                        <input class="form-control customizer" type="number"{% if loop.index0 == 0 %}
+                               id="{{ pid }}"{% endif %} value="{{ initial }}" attr-name="{{ param['name'] }}"
+                               attr-index="{{ loop.index0 }}" autocomplete="off">
+                    {% endfor %}
+                </div>
+            {% elif param['options'] %}
+                <select class="form-control customizer" id="{{ pid }}" attr-name="{{ param['name'] }}" autocomplete="off">
+                    {% for option in param['options'] %}
+                        <option value="{{ option['value'] | json_dump }}"
+                                {% if option['value'] == param['initial'] %}selected{% endif %}>{{ option['name'] }}</option>
+                    {% endfor %}
+                </select>
+            {% elif param['type'] == 'number' %}
+                <input class="form-control customizer" type="number" id="{{ pid }}" value="{{ param['initial'] }}"
+                       attr-name="{{ param['name'] }}" autocomplete="off">
+            {% elif param['type'] == 'boolean' %}
+                <input class="form-check-input customizer" type="checkbox" id="{{ pid }}"
+                       {% if param['initial'] %}checked{% endif %} attr-name="{{ param['name'] }}" autocomplete="off">
+            {% else %}
+                <input class="form-control customizer" type="text" id="{{ pid }}" value="{{ param['initial'] }}"
+                       attr-name="{{ param['name'] }}" autocomplete="off">
+            {% endif %}
+        </div>
+    {% endfor %}
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+        crossorigin="anonymous"></script>
+</body>
+</html>
