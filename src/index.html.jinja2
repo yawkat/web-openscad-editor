@@ -55,7 +55,7 @@
         const renderButton = document.getElementById("render");
         const renderState = document.getElementById("render-state");
         const downloadStlButton = document.getElementById("download-stl");
-        const worker = new Worker("./worker.js", {type: "module"})
+        const worker = new Worker("./{{ worker_script_name }}", {type: "module"})
         worker.addEventListener("error", (event) => {
             console.error("Worker script error", event)
         })

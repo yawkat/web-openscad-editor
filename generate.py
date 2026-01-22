@@ -8,6 +8,7 @@ import json
 import base64
 import jinja2
 import shutil
+import hashlib
 
 
 def main():
@@ -67,10 +68,16 @@ def main():
         "input": args.scad,
         "args": args,
     }
+
+    worker_source = j2env.get_template("worker.js.jinja2").render(**variables)
+    worker_hash = hashlib.sha256(worker_source.encode("utf-8")).hexdigest()[:12]
+    worker_script_name = f"worker.{worker_hash}.js"
+    variables["worker_script_name"] = worker_script_name
+
     with open(os.path.join(args.output, "index.html"), "w") as f:
         f.write(j2env.get_template("index.html.jinja2").render(**variables))
-    with open(os.path.join(args.output, "worker.js"), "w") as f:
-        f.write(j2env.get_template("worker.js.jinja2").render(**variables))
+    with open(os.path.join(args.output, worker_script_name), "w") as f:
+        f.write(worker_source)
     try:
         shutil.rmtree(args.output + "/openscad-wasm")
     except FileNotFoundError:
