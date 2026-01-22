@@ -358,7 +358,7 @@
             {% elif param['options'] %}
                 <select class="form-control customizer" id="{{ pid }}" attr-name="{{ param['name'] }}" autocomplete="off">
                     {% for option in param['options'] %}
-                        <option value="{{ option['value'] | json_dump }}"
+                        <option value='{{ option['value'] | json_dump }}'
                                 {% if option['value'] == param['initial'] %}selected{% endif %}>{{ option['name'] }}</option>
                     {% endfor %}
                 </select>
