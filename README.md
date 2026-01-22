@@ -66,3 +66,7 @@ uv run python generate.py \
   --openscad-wasm openscad-wasm \
   --output out
 ```
+
+## License
+
+While this repository is MIT-licensed, it bundles OpenSCAD binaries which are licensed under GPL. If you use this project, you must also follow the OpenSCAD terms.
