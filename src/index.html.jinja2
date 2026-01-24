@@ -396,9 +396,10 @@
 
     {% set state = namespace(current_group=None) %}
     {% for param in metadata["parameters"] + (additional_parameters | default([])) %}
-        {% if not param.get('_is_additional') and param['group'] != state.current_group %}
-            {% set state.current_group = param['group'] %}
-            <h3>{{ param['group'] }}</h3>
+        {% set group = param.get('group') %}
+        {% if group and group != state.current_group %}
+            {% set state.current_group = group %}
+            <h3>{{ group }}</h3>
         {% endif %}
         {{ render_param(param) }}
     {% endfor %}

@@ -6,9 +6,8 @@ import { GLTFExporter } from "https://esm.sh/three@0.160.0/examples/jsm/exporter
 console.log("Worker started")
 
 let runQueue = Promise.resolve()
-let instancePromise = null
-let instance = null
-let fsLoaded = false
+// OpenSCAD's WASM build aborts its runtime after a render.
+// Create a fresh instance for each render.
 
 const INPUTS = {{ inputs | json_dump }}
 
@@ -72,29 +71,23 @@ async function stlBytesToGlb(stlBytes) {
     })
 }
 
-async function getInstance() {
-    if (!instancePromise) {
-        instancePromise = OpenSCAD({
-            noInitialRun: true,
-            print: console.log,
-            printErr: console.log,
-        })
-    }
-    instance = await instancePromise
-    if (!fsLoaded) {
-        {% for k, v in fs.items() %}
-        {
-            const data = base64ToUint8Array("{{ v }}")
-            console.log("Loading {{ k }} (" + data.length + " bytes)")
-            const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
-            if (parent) {
-                instance.FS.mkdirTree(parent)
-            }
-            instance.FS.writeFile("{{ k }}", data)
+async function createInstance() {
+    const instance = await OpenSCAD({
+        noInitialRun: true,
+        print: console.log,
+        printErr: console.log,
+    })
+    {% for k, v in fs.items() %}
+    {
+        const data = base64ToUint8Array("{{ v }}")
+        console.log("Loading {{ k }} (" + data.length + " bytes)")
+        const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
+        if (parent) {
+            instance.FS.mkdirTree(parent)
         }
-        {% endfor %}
-        fsLoaded = true
+        instance.FS.writeFile("{{ k }}", data)
     }
+    {% endfor %}
     return instance
 }
 
@@ -111,7 +104,7 @@ function normalizeInputPath(input) {
 }
 
 async function renderOnce({ input, customization, additionalParamNames }) {
-    const instance = await getInstance()
+    const instance = await createInstance()
     const inputPath = normalizeInputPath(input)
 
     const additionalParamNameSet = new Set(
