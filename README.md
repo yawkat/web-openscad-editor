@@ -18,9 +18,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: yawkat/web-openscad-editor@v1
         with:
-          scad: path/to/model.scad
+          scad: |
+            path/to/model-a.scad
+            path/to/model-b.scad
+          mode: multi
           # optional:
           # output: out
+          # mode: single
+          # clean-urls: "true"
           # openscad-version: 2026.01.19
           # openscad-appimage-sha256: <sha256>
           # openscad-wasm-zip-sha256: <sha256>
@@ -38,7 +43,8 @@ For local testing inside this repo, use `./`:
 ```yaml
 - uses: ./
   with:
-    scad: test.scad
+    scad: |
+      test.scad
 ```
 ```
 
@@ -49,6 +55,8 @@ Defaults:
 - `export-filename-prefix`: repository name (falls back to `openscad-export`)
 - `project-uri`: repository URL (falls back to `https://example.com/`)
 - `openscad-version`: `2026.01.19` (downloads from `https://files.openscad.org/snapshots/`)
+- `mode`: `single`
+- `clean-urls`: `"true"` (action only; CLI default is off)
 
 The action downloads:
 
@@ -65,6 +73,16 @@ uv run python generate.py \
   --scad test.scad \
   --openscad-wasm openscad-wasm \
   --output out
+
+Modes:
+
+- `--mode=single` (default): generates a single generator at `index.html`.
+- `--mode=multi`: generates one generator per input at `<file>.html` and an `index.html` that links to them. This also works with only one input file.
+
+Clean URLs:
+
+- CLI: pass `--clean-urls` to generate link URLs without the `.html` extension.
+- Action: `clean-urls` defaults to `"true"` to match GitHub Pages/Cloudflare Pages behavior.
 ```
 
 ## License
