@@ -61,6 +61,11 @@ runs:
       uses: astral-sh/setup-uv@v3
       with:
         enable-cache: true
+        # Cache should be keyed off this action's Python deps, not the caller repository.
+        working-directory: ${{ github.action_path }}
+        cache-dependency-glob: |
+          uv.lock
+          pyproject.toml
 
     - name: Install OpenSCAD snapshot
       shell: bash
