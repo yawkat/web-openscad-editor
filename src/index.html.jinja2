@@ -56,6 +56,7 @@
         const renderState = document.getElementById("render-state");
         const downloadStlButton = document.getElementById("download-stl");
         const worker = new Worker("./{{ worker_script_name }}", {type: "module"})
+        const SCAD_INPUT = {{ input | json_dump }};
         worker.addEventListener("error", (event) => {
             console.error("Worker script error", event)
         })
@@ -271,7 +272,7 @@
 
         function startRender() {
             setRendering(true);
-            worker.postMessage({type: "render", customization: currentCustomization});
+            worker.postMessage({type: "render", input: SCAD_INPUT, customization: currentCustomization});
         }
 
         navigation.addEventListener("navigate", (event) => {
@@ -334,7 +335,20 @@
     </div>
 </div>
 <div id="pane-right" class="row">
-    <p>This is the model generator for <a href="{{ args.project_uri }}">{{ args.project_name }}</a>. Any changes you make are saved in the URL, so you can share that URL or create a bookmark to keep those changes around.</p>
+    <p>
+        This is the model generator for <a href="{{ args.project_uri }}">{{ args.project_name }}</a>.
+        Any changes you make are saved in the URL, so you can share that URL or create a bookmark to keep those changes around.
+        {% if generators and generators|length > 1 %}
+            Other generators:
+            {% for g in generators %}
+                {% if g.output_html == output_html %}
+                    <strong>{{ g.label }}</strong>{% if not loop.last %},{% endif %}
+                {% else %}
+                    <a href="{{ g.link }}">{{ g.label }}</a>{% if not loop.last %},{% endif %}
+                {% endif %}
+            {% endfor %}
+        {% endif %}
+    </p>
     {% set state = namespace(current_group=None) %}
     {% for param in metadata["parameters"] %}
         {% if param['group'] != state.current_group %}

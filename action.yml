@@ -4,8 +4,16 @@ author: yawkat
 
 inputs:
   scad:
-    description: Input SCAD file
+    description: "Input SCAD file(s) (newline- or comma-separated)"
     required: true
+  mode:
+    description: "Output mode: single (index.html) or multi (per-file HTML + index list)"
+    required: false
+    default: single
+  clean-urls:
+    description: "Omit .html in generated links (for hosts that map /foo -> /foo.html)"
+    required: false
+    default: "true"
   output:
     description: Output directory
     required: false
@@ -131,12 +139,8 @@ runs:
       run: |
         set -euo pipefail
 
-        scad='${{ inputs.scad }}'
-        if [[ "$scad" = /* ]]; then
-          scad_path="$scad"
-        else
-          scad_path="$GITHUB_WORKSPACE/$scad"
-        fi
+        scads_raw='${{ inputs.scad }}'
+        scads_raw="${scads_raw//$'\r'/}"
 
         out='${{ inputs.output }}'
         if [[ "$out" = /* ]]; then
@@ -146,10 +150,33 @@ runs:
         fi
 
         args=(
-          --scad "$scad_path"
           --output "$out_path"
           --openscad-wasm "$OPENSCAD_WASM_DIR"
+          --mode '${{ inputs.mode }}'
         )
+
+        if [ '${{ inputs.clean-urls }}' = 'true' ]; then
+          args+=(--clean-urls)
+        fi
+
+        added_scad=0
+        while IFS= read -r scad; do
+          if [ -z "$scad" ]; then
+            continue
+          fi
+          if [[ "$scad" = /* ]]; then
+            scad_path="$scad"
+          else
+            scad_path="$GITHUB_WORKSPACE/$scad"
+          fi
+          args+=(--scad "$scad_path")
+          added_scad=1
+        done < <(printf '%s' "$scads_raw" | tr ',' '\n')
+
+        if [ "$added_scad" -ne 1 ]; then
+          echo "No SCAD inputs provided" >&2
+          exit 1
+        fi
         if [ -n '${{ inputs.project-name }}' ]; then
           args+=(--project-name '${{ inputs.project-name }}')
         fi

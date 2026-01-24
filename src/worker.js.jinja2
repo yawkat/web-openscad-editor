@@ -6,6 +6,11 @@ import { GLTFExporter } from "https://esm.sh/three@0.160.0/examples/jsm/exporter
 console.log("Worker started")
 
 let runQueue = Promise.resolve()
+let instancePromise = null
+let instance = null
+let fsLoaded = false
+
+const INPUTS = {{ inputs | json_dump }}
 
 function base64ToUint8Array(base64) {
     const binary = atob(base64)
@@ -67,24 +72,47 @@ async function stlBytesToGlb(stlBytes) {
     })
 }
 
-async function renderOnce(customization) {
-    const instance = await OpenSCAD({
-        noInitialRun: true,
-        print: console.log,
-        printErr: console.log,
-    })
-
-    {% for k, v in fs.items() %}
-    {
-        const data = base64ToUint8Array("{{ v }}")
-        console.log("Loading {{ k }} (" + data.length + " bytes)")
-        const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
-        if (parent) {
-            instance.FS.mkdirTree(parent)
-        }
-        instance.FS.writeFile("{{ k }}", data)
+async function getInstance() {
+    if (!instancePromise) {
+        instancePromise = OpenSCAD({
+            noInitialRun: true,
+            print: console.log,
+            printErr: console.log,
+        })
     }
-    {% endfor %}
+    instance = await instancePromise
+    if (!fsLoaded) {
+        {% for k, v in fs.items() %}
+        {
+            const data = base64ToUint8Array("{{ v }}")
+            console.log("Loading {{ k }} (" + data.length + " bytes)")
+            const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
+            if (parent) {
+                instance.FS.mkdirTree(parent)
+            }
+            instance.FS.writeFile("{{ k }}", data)
+        }
+        {% endfor %}
+        fsLoaded = true
+    }
+    return instance
+}
+
+function normalizeInputPath(input) {
+    const inputPath = String(input || "")
+    if (!inputPath) {
+        throw new Error("Missing input SCAD path")
+    }
+    const normalized = inputPath.startsWith("/") ? inputPath : "/" + inputPath
+    if (!INPUTS.includes(normalized)) {
+        throw new Error("Unknown input SCAD path: " + normalized)
+    }
+    return normalized
+}
+
+async function renderOnce({ input, customization }) {
+    const instance = await getInstance()
+    const inputPath = normalizeInputPath(input)
 
     const stringifiedParameters = {};
     for (const [k, v] of Object.entries(customization)) {
@@ -98,8 +126,13 @@ async function renderOnce(customization) {
         }
     }))
 
-    const output = "output.stl"
-    instance.callMain(["{{ input }}", "-o", output, "--export-format=binstl", "-p", "/parameters.json", "-P", "single"])
+    const output = "/output.stl"
+    try {
+        instance.FS.unlink(output)
+    } catch (e) {
+        // ignore
+    }
+    instance.callMain([inputPath, "-o", output, "--export-format=binstl", "-p", "/parameters.json", "-P", "single"])
     const stlBytes = instance.FS.readFile(output)
 
     const glb = await stlBytesToGlb(stlBytes)
@@ -121,7 +154,7 @@ self.addEventListener("message", (event) => {
         if (msg.type !== "render") {
             return
         }
-        await renderOnce(msg.customization)
+        await renderOnce({input: msg.input, customization: msg.customization})
     })
     runQueue.catch((e) => {
         console.error(e);

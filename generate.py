@@ -13,7 +13,13 @@ import hashlib
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scad", type=str, required=True, help="Input SCAD file")
+    parser.add_argument(
+        "--scad",
+        type=str,
+        action="append",
+        required=True,
+        help="Input SCAD file (repeatable)",
+    )
     parser.add_argument(
         "--output",
         type=str,
@@ -32,6 +38,19 @@ def main():
     parser.add_argument(
         "--export-filename-prefix", type=str, required=False, default=None
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["single", "multi"],
+        required=False,
+        default="single",
+        help="Output mode: single (index.html) or multi (per-file HTML + index list)",
+    )
+    parser.add_argument(
+        "--clean-urls",
+        action="store_true",
+        help="When linking to generated pages, omit the .html extension",
+    )
     args = parser.parse_args()
 
     gh_repo = os.environ.get("GITHUB_REPOSITORY")
@@ -49,11 +68,25 @@ def main():
     def run_openscad(*params: str):
         subprocess.run(["openscad"] + list(params), check=True)
 
-    with tempfile.NamedTemporaryFile("r") as f:
-        run_openscad("-o", f.name, "--export-format=param", args.scad)
-        metadata = json.load(f)
+    scad_host_paths = [os.path.abspath(p) for p in args.scad]
+    scad_root = os.path.commonpath([os.path.dirname(p) for p in scad_host_paths])
+
+    scad_entries: typing.List[typing.Dict[str, typing.Any]] = []
+    for scad_host_path in scad_host_paths:
+        with tempfile.NamedTemporaryFile("r") as f:
+            run_openscad("-o", f.name, "--export-format=param", scad_host_path)
+            metadata = json.load(f)
+        scad_entries.append(
+            {
+                "host_path": scad_host_path,
+                "virtual_path": host_path_to_virtual(scad_root, scad_host_path),
+                "metadata": metadata,
+            }
+        )
+
     fs: typing.Dict[str, bytes] = {}
-    load_scad_recursively(args.scad, fs)
+    for entry in scad_entries:
+        load_scad_recursively(entry["host_path"], scad_root, fs)
     try:
         os.makedirs(args.output)
     except FileExistsError:
@@ -62,20 +95,66 @@ def main():
         loader=jinja2.FileSystemLoader(os.path.dirname(__file__) + "/src")
     )
     j2env.filters["json_dump"] = json.dumps
-    variables = {
-        "metadata": metadata,
+    variables_base = {
         "fs": {k: base64.b64encode(v).decode("ascii") for k, v in fs.items()},
-        "input": args.scad,
+        "inputs": [e["virtual_path"] for e in scad_entries],
         "args": args,
     }
 
-    worker_source = j2env.get_template("worker.js.jinja2").render(**variables)
+    generators: typing.List[typing.Dict[str, str]] = []
+    for entry in scad_entries:
+        output_html = output_filename_for_scad(entry["virtual_path"])
+        generators.append(
+            {
+                "virtual_path": entry["virtual_path"],
+                "output_html": output_html,
+                "link": link_for_output_filename(output_html, clean_urls=args.clean_urls),
+                "label": label_for_scad(entry["virtual_path"]),
+            }
+        )
+    variables_base["generators"] = generators
+
+    worker_source = j2env.get_template("worker.js.jinja2").render(**variables_base)
     worker_hash = hashlib.sha256(worker_source.encode("utf-8")).hexdigest()[:12]
     worker_script_name = f"worker.{worker_hash}.js"
-    variables["worker_script_name"] = worker_script_name
+    variables_base["worker_script_name"] = worker_script_name
 
-    with open(os.path.join(args.output, "index.html"), "w") as f:
-        f.write(j2env.get_template("index.html.jinja2").render(**variables))
+    if args.mode == "single":
+        if len(scad_entries) != 1:
+            raise SystemExit(
+                "--mode=single requires exactly one --scad input (use --mode=multi instead)"
+            )
+
+        with open(os.path.join(args.output, "index.html"), "w") as f:
+            variables = dict(variables_base)
+            variables.update(
+                {
+                    "metadata": scad_entries[0]["metadata"],
+                    "input": scad_entries[0]["virtual_path"],
+                    "output_html": "index.html",
+                }
+            )
+            f.write(j2env.get_template("index.html.jinja2").render(**variables))
+
+    if args.mode == "multi":
+        for entry in scad_entries:
+            output_html = output_filename_for_scad(entry["virtual_path"])
+            variables = dict(variables_base)
+            variables.update(
+                {
+                    "metadata": entry["metadata"],
+                    "input": entry["virtual_path"],
+                    "output_html": output_html,
+                }
+            )
+            with open(os.path.join(args.output, output_html), "w") as f:
+                f.write(j2env.get_template("index.html.jinja2").render(**variables))
+
+        with open(os.path.join(args.output, "index.html"), "w") as f:
+            f.write(
+                j2env.get_template("multi_index.html.jinja2").render(**variables_base)
+            )
+
     with open(os.path.join(args.output, worker_script_name), "w") as f:
         f.write(worker_source)
     try:
@@ -88,19 +167,56 @@ def main():
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
 
 
-def load_scad_recursively(path: str, fs: typing.Dict[str, bytes]):
-    if path in fs:
+def host_path_to_virtual(root: str, host_path: str) -> str:
+    rel = os.path.relpath(host_path, root)
+    rel = rel.replace(os.sep, "/")
+    if rel == ".":
+        rel = os.path.basename(host_path)
+    return "/" + rel.lstrip("./")
+
+
+def output_filename_for_scad(virtual_path: str) -> str:
+    name = virtual_path.lstrip("/")
+    if name.lower().endswith(".scad"):
+        name = name[: -len(".scad")]
+    # Keep some context (directories) to avoid collisions.
+    name = name.replace("/", "-")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-_")
+    if not name:
+        name = "model"
+    return f"{name}.html"
+
+
+def label_for_scad(virtual_path: str) -> str:
+    name = os.path.basename(virtual_path)
+    if name.lower().endswith(".scad"):
+        name = name[: -len(".scad")]
+    return name or virtual_path
+
+
+def link_for_output_filename(output_html: str, *, clean_urls: bool) -> str:
+    if clean_urls and output_html.lower().endswith(".html"):
+        return output_html[: -len(".html")]
+    return output_html
+
+
+def load_scad_recursively(host_path: str, root: str, fs: typing.Dict[str, bytes]):
+    virtual_path = host_path_to_virtual(root, host_path)
+    if virtual_path in fs:
         return
-    print(f"Including {path}")
-    with open(path, "rb") as f:
+    print(f"Including {virtual_path}")
+    with open(host_path, "rb") as f:
         binary = f.read()
-    fs[path] = binary
+    fs[virtual_path] = binary
     text = binary.decode("utf-8")
     for line in text.splitlines():
         include = pattern_include.match(line)
         if include:
             load_scad_recursively(
-                os.path.normpath(os.path.join(os.path.dirname(path), include.group(1))),
+                os.path.normpath(
+                    os.path.join(os.path.dirname(host_path), include.group(1))
+                ),
+                root,
                 fs,
             )
 
