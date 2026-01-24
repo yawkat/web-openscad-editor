@@ -5,6 +5,90 @@ import { GLTFExporter } from "https://esm.sh/three@0.160.0/examples/jsm/exporter
 
 console.log("Worker started")
 
+const MAX_LOG_CHARS = 1024 * 1024
+let currentLog = ""
+let currentLogTruncated = false
+
+function stringifyLogValue(v) {
+    if (v instanceof Error) {
+        return v && v.stack ? String(v.stack) : String(v)
+    }
+    if (typeof v === "string") {
+        return v
+    }
+    if (v === null) {
+        return "null"
+    }
+    if (v === undefined) {
+        return "undefined"
+    }
+    try {
+        return JSON.stringify(v)
+    } catch (e) {
+        return String(v)
+    }
+}
+
+function appendLogLine(line) {
+    if (!line) {
+        line = ""
+    }
+    currentLog += String(line) + "\n"
+    if (currentLog.length > MAX_LOG_CHARS) {
+        currentLog = currentLog.slice(currentLog.length - MAX_LOG_CHARS)
+        if (!currentLogTruncated) {
+            currentLogTruncated = true
+            currentLog = "[log truncated]\n" + currentLog
+        }
+    }
+}
+
+function logToConsoleAndBuffer(level, ...args) {
+    const line = args.map(stringifyLogValue).join(" ")
+    appendLogLine(line)
+    const fn = console[level] || console.log
+    fn.apply(console, args)
+}
+
+function logInfo(...args) {
+    logToConsoleAndBuffer("log", ...args)
+}
+
+function logError(...args) {
+    logToConsoleAndBuffer("error", ...args)
+}
+
+function formatErrorForMessage(e) {
+    if (e instanceof Error) {
+        return String(e && e.message ? e.message : e)
+    }
+    if (typeof e === "string") {
+        return e
+    }
+    if (!e || typeof e !== "object") {
+        return String(e)
+    }
+
+    const message = typeof e.message === "string" ? e.message.trim() : ""
+    if (message) {
+        return message
+    }
+    if (typeof e.name === "string" && e.name) {
+        if (typeof e.errno === "number") {
+            return `${e.name} (errno ${e.errno})`
+        }
+        return e.name
+    }
+    if (typeof e.errno === "number") {
+        return `Error (errno ${e.errno})`
+    }
+    try {
+        return JSON.stringify(e)
+    } catch (err) {
+        return String(e)
+    }
+}
+
 let runQueue = Promise.resolve()
 // OpenSCAD's WASM build aborts its runtime after a render.
 // Create a fresh instance for each render.
@@ -74,13 +158,13 @@ async function stlBytesToGlb(stlBytes) {
 async function createInstance() {
     const instance = await OpenSCAD({
         noInitialRun: true,
-        print: console.log,
-        printErr: console.log,
+        print: logInfo,
+        printErr: logInfo,
     })
     {% for k, v in fs.items() %}
     {
         const data = base64ToUint8Array("{{ v }}")
-        console.log("Loading {{ k }} (" + data.length + " bytes)")
+        logInfo("Loading {{ k }} (" + data.length + " bytes)")
         const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
         if (parent) {
             instance.FS.mkdirTree(parent)
@@ -124,8 +208,8 @@ async function renderOnce({ input, customization, additionalParamNames }) {
             stringifiedParameters[k] = typeof v === "string" ? v : JSON.stringify(v)
         }
     }
-    console.log("Parameters:", stringifiedParameters)
-    console.log("Additional -D:", additionalDefinitions)
+    logInfo("Parameters:", stringifiedParameters)
+    logInfo("Additional -D:", additionalDefinitions)
     instance.FS.writeFile(
         "/parameters.json",
         JSON.stringify({
@@ -155,15 +239,24 @@ async function renderOnce({ input, customization, additionalParamNames }) {
     for (const def of additionalDefinitions) {
         args.push("-D", def)
     }
-    instance.callMain(args)
-    const stlBytes = instance.FS.readFile(output)
-
-    const glb = await stlBytesToGlb(stlBytes)
-    self.postMessage({
-        type: "ok",
-        glb: glb,
-        stl: stlBytes
-    })
+    try {
+        instance.callMain(args)
+        const stlBytes = instance.FS.readFile(output)
+        const glb = await stlBytesToGlb(stlBytes)
+        self.postMessage({
+            type: "ok",
+            glb: glb,
+            stl: stlBytes,
+        })
+    } catch (e) {
+        logError(e)
+        self.postMessage({
+            type: "error",
+            error: formatErrorForMessage(e),
+            stack: String(e && e.stack ? e.stack : ""),
+            log: currentLog,
+        })
+    }
 }
 
 self.addEventListener("message", (event) => {
@@ -177,6 +270,8 @@ self.addEventListener("message", (event) => {
         if (msg.type !== "render") {
             return
         }
+        currentLog = ""
+        currentLogTruncated = false
         await renderOnce({
             input: msg.input,
             customization: msg.customization,
@@ -184,11 +279,12 @@ self.addEventListener("message", (event) => {
         })
     })
     runQueue.catch((e) => {
-        console.error(e);
+        logError(e)
         self.postMessage({
             type: "error",
-            error: String(e && e.message ? e.message : e),
+            error: formatErrorForMessage(e),
             stack: String(e && e.stack ? e.stack : ""),
+            log: currentLog,
         })
     })
 })
