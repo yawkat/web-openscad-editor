@@ -22,8 +22,7 @@ jobs:
       - name: Generate site
         uses: ./
         with:
-          scad: |
-            test.scad
+          scad: test.scad
           output: out
 
       - name: Publish

@@ -4,8 +4,12 @@ author: yawkat
 
 inputs:
   scad:
-    description: "Input SCAD file(s) (newline- or comma-separated)"
-    required: true
+    description: "Input SCAD file (single path). Ignored if 'scad-json' is set."
+    required: false
+    default: ""
+  scad-json:
+    description: "Optional JSON array for multi-input: [{file: <scad>, additional-params: [<param.json>, ...]}, ...]. Overrides 'scad'."
+    required: false
   mode:
     description: "Output mode: single (index.html) or multi (per-file HTML + index list)"
     required: false
@@ -139,8 +143,11 @@ runs:
       run: |
         set -euo pipefail
 
-        scads_raw='${{ inputs.scad }}'
-        scads_raw="${scads_raw//$'\r'/}"
+        scad_raw='${{ inputs.scad }}'
+        scad_raw="${scad_raw//$'\r'/}"
+
+        scad_json_raw='${{ inputs.scad-json }}'
+        scad_json_raw="${scad_json_raw//$'\r'/}"
 
         out='${{ inputs.output }}'
         if [[ "$out" = /* ]]; then
@@ -159,24 +166,13 @@ runs:
           args+=(--clean-urls)
         fi
 
-        added_scad=0
-        while IFS= read -r scad; do
-          if [ -z "$scad" ]; then
-            continue
-          fi
-          if [[ "$scad" = /* ]]; then
-            scad_path="$scad"
-          else
-            scad_path="$GITHUB_WORKSPACE/$scad"
-          fi
-          args+=(--scad "$scad_path")
-          added_scad=1
-        done < <(printf '%s' "$scads_raw" | tr ',' '\n')
-
-        if [ "$added_scad" -ne 1 ]; then
-          echo "No SCAD inputs provided" >&2
-          exit 1
-        fi
+        scad_json_file="$(mktemp)"
+        python normalize_scad_input.py \
+          --workspace "$GITHUB_WORKSPACE" \
+          --scad "$scad_raw" \
+          --scad-json "$scad_json_raw" \
+          --out "$scad_json_file"
+        args+=(--scad-json "@$scad_json_file")
         if [ -n '${{ inputs.project-name }}' ]; then
           args+=(--project-name '${{ inputs.project-name }}')
         fi
@@ -196,3 +192,4 @@ runs:
         fi
 
         uv run python generate.py "${args[@]}" "${extra_args[@]}"
+        rm -f "$scad_json_file"

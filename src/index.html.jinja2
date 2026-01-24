@@ -57,6 +57,11 @@
         const downloadStlButton = document.getElementById("download-stl");
         const worker = new Worker("./{{ worker_script_name }}", {type: "module"})
         const SCAD_INPUT = {{ input | json_dump }};
+        const ADDITIONAL_PARAM_NAMES = [
+            {% for param in additional_parameters | default([]) %}
+                {{ param['name'] | json_dump }},
+            {% endfor %}
+        ];
         worker.addEventListener("error", (event) => {
             console.error("Worker script error", event)
         })
@@ -80,7 +85,7 @@
         });
 
         const defaultCustomization = {
-            {% for param in metadata["parameters"] -%}
+            {% for param in metadata["parameters"] + (additional_parameters | default([])) -%}
                 "{{ param["name"] }}":
                 {%- if param["type"] == "boolean" %}{% if param["initial"] %}true{% else %}false{% endif %}
                 {%- elif param["type"] == "string" %}"{{ param["initial"] }}"
@@ -272,7 +277,12 @@
 
         function startRender() {
             setRendering(true);
-            worker.postMessage({type: "render", input: SCAD_INPUT, customization: currentCustomization});
+            worker.postMessage({
+                type: "render",
+                input: SCAD_INPUT,
+                customization: currentCustomization,
+                additionalParamNames: ADDITIONAL_PARAM_NAMES,
+            });
         }
 
         navigation.addEventListener("navigate", (event) => {
@@ -349,12 +359,7 @@
             {% endfor %}
         {% endif %}
     </p>
-    {% set state = namespace(current_group=None) %}
-    {% for param in metadata["parameters"] %}
-        {% if param['group'] != state.current_group %}
-            {% set state.current_group = param['group'] %}
-            <h3>{{ param['group'] }}</h3>
-        {% endif %}
+    {% macro render_param(param) %}
         {% set pid = "parameter_" + param['name'] %}
         <div class="col-6 text-end mb-2">
             <label for="{{ pid }}">{{ param['name'].replace('_', ' ') }}<br><span
@@ -387,6 +392,15 @@
                        attr-name="{{ param['name'] }}" autocomplete="off">
             {% endif %}
         </div>
+    {% endmacro %}
+
+    {% set state = namespace(current_group=None) %}
+    {% for param in metadata["parameters"] + (additional_parameters | default([])) %}
+        {% if not param.get('_is_additional') and param['group'] != state.current_group %}
+            {% set state.current_group = param['group'] %}
+            <h3>{{ param['group'] }}</h3>
+        {% endif %}
+        {{ render_param(param) }}
     {% endfor %}
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"

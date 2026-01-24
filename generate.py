@@ -17,8 +17,27 @@ def main():
         "--scad",
         type=str,
         action="append",
-        required=True,
+        required=False,
         help="Input SCAD file (repeatable)",
+    )
+    parser.add_argument(
+        "--scad-json",
+        type=str,
+        required=False,
+        help=(
+            "JSON array of objects: [{file: <scad>, additional-params: [<param.json>, ...]}, ...]. "
+            "If prefixed with '@', the remainder is treated as a path to a JSON file."
+        ),
+    )
+    parser.add_argument(
+        "--additional-params",
+        type=str,
+        action="append",
+        default=[],
+        help=(
+            "Additional param metadata JSON file(s) (same format as --export-format=param). "
+            "Only supported when a single --scad input is used (use --scad-json for multi-input)."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -68,19 +87,90 @@ def main():
     def run_openscad(*params: str):
         subprocess.run(["openscad"] + list(params), check=True)
 
-    scad_host_paths = [os.path.abspath(p) for p in args.scad]
+    scad_configs: typing.List[typing.Dict[str, typing.Any]] = []
+    if args.scad_json:
+        scad_json = args.scad_json
+        if scad_json.startswith("@"):  # @path
+            with open(scad_json[1:], "r", encoding="utf-8") as f:
+                scad_json = f.read()
+        try:
+            parsed = json.loads(scad_json)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"--scad-json is not valid JSON: {e}")
+
+        if not isinstance(parsed, list):
+            raise SystemExit(
+                "--scad-json must be a JSON array: [{file: <scad>, additional-params: [<param.json>, ...]}, ...]"
+            )
+        for item in parsed:
+            if not isinstance(item, dict) or "file" not in item:
+                raise SystemExit(
+                    "--scad-json entries must be objects with a 'file' key (and optional 'additional-params')"
+                )
+            additional = item.get("additional-params", [])
+            if additional is None:
+                additional = []
+            if not isinstance(additional, list):
+                raise SystemExit("'additional-params' must be a list")
+            scad_configs.append(
+                {
+                    "file": os.path.abspath(item["file"]),
+                    "additional_params": [os.path.abspath(p) for p in additional],
+                }
+            )
+    else:
+        if not args.scad:
+            raise SystemExit("At least one --scad (or --scad-json) must be provided")
+        if len(args.scad) != 1 and args.additional_params:
+            raise SystemExit(
+                "--additional-params is only supported with a single --scad input (use --scad-json for multiple)"
+            )
+        scad_configs = []
+        for i, scad in enumerate(args.scad):
+            scad_configs.append(
+                {
+                    "file": os.path.abspath(scad),
+                    "additional_params": [
+                        os.path.abspath(p) for p in args.additional_params
+                    ]
+                    if i == 0 and len(args.scad) == 1
+                    else [],
+                }
+            )
+
+    scad_host_paths = [c["file"] for c in scad_configs]
     scad_root = os.path.commonpath([os.path.dirname(p) for p in scad_host_paths])
 
     scad_entries: typing.List[typing.Dict[str, typing.Any]] = []
-    for scad_host_path in scad_host_paths:
+    for cfg in scad_configs:
+        scad_host_path = cfg["file"]
         with tempfile.NamedTemporaryFile("r") as f:
             run_openscad("-o", f.name, "--export-format=param", scad_host_path)
             metadata = json.load(f)
+
+        additional_parameters: typing.List[typing.Dict[str, typing.Any]] = []
+        for param_path in cfg["additional_params"]:
+            with open(param_path, "r", encoding="utf-8") as f:
+                additional_metadata = json.load(f)
+            params = additional_metadata.get("parameters")
+            if not isinstance(params, list):
+                raise SystemExit(
+                    f"Additional param file does not contain a 'parameters' array: {param_path}"
+                )
+            for p in params:
+                if not isinstance(p, dict):
+                    raise SystemExit(
+                        f"Additional param file contains non-object entries: {param_path}"
+                    )
+                p2 = dict(p)
+                p2["_is_additional"] = True
+                additional_parameters.append(p2)
         scad_entries.append(
             {
                 "host_path": scad_host_path,
                 "virtual_path": host_path_to_virtual(scad_root, scad_host_path),
                 "metadata": metadata,
+                "additional_parameters": additional_parameters,
             }
         )
 
@@ -108,7 +198,9 @@ def main():
             {
                 "virtual_path": entry["virtual_path"],
                 "output_html": output_html,
-                "link": link_for_output_filename(output_html, clean_urls=args.clean_urls),
+                "link": link_for_output_filename(
+                    output_html, clean_urls=args.clean_urls
+                ),
                 "label": label_for_scad(entry["virtual_path"]),
             }
         )
@@ -130,6 +222,7 @@ def main():
             variables.update(
                 {
                     "metadata": scad_entries[0]["metadata"],
+                    "additional_parameters": scad_entries[0]["additional_parameters"],
                     "input": scad_entries[0]["virtual_path"],
                     "output_html": "index.html",
                 }
@@ -143,6 +236,7 @@ def main():
             variables.update(
                 {
                     "metadata": entry["metadata"],
+                    "additional_parameters": entry["additional_parameters"],
                     "input": entry["virtual_path"],
                     "output_html": output_html,
                 }

@@ -18,9 +18,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: yawkat/web-openscad-editor@v1
         with:
-          scad: |
-            path/to/model-a.scad
-            path/to/model-b.scad
+          scad-json: |
+            [
+              {"file": "path/to/model-a.scad"},
+              {"file": "path/to/model-b.scad", "additional-params": ["path/to/model-b.extra-params.json"]}
+            ]
           mode: multi
           # optional:
           # output: out
@@ -43,8 +45,7 @@ For local testing inside this repo, use `./`:
 ```yaml
 - uses: ./
   with:
-    scad: |
-      test.scad
+    scad: test.scad
 ```
 ```
 

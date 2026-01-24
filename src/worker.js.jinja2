@@ -110,21 +110,38 @@ function normalizeInputPath(input) {
     return normalized
 }
 
-async function renderOnce({ input, customization }) {
+async function renderOnce({ input, customization, additionalParamNames }) {
     const instance = await getInstance()
     const inputPath = normalizeInputPath(input)
 
-    const stringifiedParameters = {};
+    const additionalParamNameSet = new Set(
+        Array.isArray(additionalParamNames)
+            ? additionalParamNames.filter((x) => typeof x === "string")
+            : [],
+    )
+
+    const stringifiedParameters = {}
+    const additionalDefinitions = []
     for (const [k, v] of Object.entries(customization)) {
-        stringifiedParameters[k] = typeof v === "string" ? v : JSON.stringify(v);
-    }
-    console.log("Parameters: ", stringifiedParameters);
-    instance.FS.writeFile("/parameters.json", JSON.stringify({
-        fileFormatVersion: 1,
-        parameterSets: {
-            single: stringifiedParameters
+        if (additionalParamNameSet.has(k)) {
+            // -D expects an OpenSCAD expression; JSON happens to be close enough for our value types.
+            additionalDefinitions.push(`${k}=${JSON.stringify(v)}`)
+        } else {
+            // Parameter set files use unquoted strings for string parameters.
+            stringifiedParameters[k] = typeof v === "string" ? v : JSON.stringify(v)
         }
-    }))
+    }
+    console.log("Parameters:", stringifiedParameters)
+    console.log("Additional -D:", additionalDefinitions)
+    instance.FS.writeFile(
+        "/parameters.json",
+        JSON.stringify({
+            fileFormatVersion: 1,
+            parameterSets: {
+                single: stringifiedParameters,
+            },
+        }),
+    )
 
     const output = "/output.stl"
     try {
@@ -132,7 +149,20 @@ async function renderOnce({ input, customization }) {
     } catch (e) {
         // ignore
     }
-    instance.callMain([inputPath, "-o", output, "--export-format=binstl", "-p", "/parameters.json", "-P", "single"])
+    const args = [
+        inputPath,
+        "-o",
+        output,
+        "--export-format=binstl",
+        "-p",
+        "/parameters.json",
+        "-P",
+        "single",
+    ]
+    for (const def of additionalDefinitions) {
+        args.push("-D", def)
+    }
+    instance.callMain(args)
     const stlBytes = instance.FS.readFile(output)
 
     const glb = await stlBytesToGlb(stlBytes)
@@ -154,7 +184,11 @@ self.addEventListener("message", (event) => {
         if (msg.type !== "render") {
             return
         }
-        await renderOnce({input: msg.input, customization: msg.customization})
+        await renderOnce({
+            input: msg.input,
+            customization: msg.customization,
+            additionalParamNames: msg.additionalParamNames,
+        })
     })
     runQueue.catch((e) => {
         console.error(e);
