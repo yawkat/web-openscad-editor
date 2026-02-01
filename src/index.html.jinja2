@@ -467,7 +467,9 @@
 </head>
 <body>
 <div id="pane-left">
-    <model-viewer id="model" camera-controls interaction-prompt="none"></model-viewer>
+    <!-- the environment image disables the default lighting -->
+    <model-viewer id="model" camera-controls interaction-prompt="none"
+                  environment-image="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAIABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJVAA//Z"></model-viewer>
     <div id="controls">
         <button id="render" type="button" class="btn btn-primary">Render<span id="render-state" class="d-none">ing… <span
                 class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></button>

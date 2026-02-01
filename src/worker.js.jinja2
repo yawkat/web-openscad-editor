@@ -117,7 +117,7 @@ async function stlBytesToGlb(stlBytes) {
     const material = new THREE.MeshStandardMaterial({
         color: 0x9aa3ad,
         metalness: 0.8,
-        roughness: 0.3,
+        roughness: 0.4,
         flatShading: true,
         vertexColors: geometry.hasAttribute("color"),
     })
@@ -129,14 +129,20 @@ async function stlBytesToGlb(stlBytes) {
     scene.add(mesh)
 
     // Add a few basic lights so the exported GLB shades nicely even without an HDR environment.
-    const lightA = new THREE.DirectionalLight(0xD60270, 5)
-    lightA.position.set(1000, 1000, 1000)
-    scene.add(lightA)
+    const lightA = new THREE.DirectionalLight(0xD60270, 20) // pink
+    lightA.position.set(1000, 1000, 1000) // north east, top
     lightA.lookAt(0, 0, 0)
-    const lightB = new THREE.DirectionalLight(0x0038A8, 5)
-    lightB.position.set(-1000, 1000, 1000)
+    scene.add(lightA)
+
+    const lightB = new THREE.DirectionalLight(0x0038A8, 20) // blue
+    lightB.position.set(-1000, 1000, 1000) // north west, top
     lightB.lookAt(0, 0, 0)
     scene.add(lightB)
+
+    const lightC = new THREE.DirectionalLight(0x9B4F96, 15) // purple
+    lightC.position.set(0, -1000, -1000) // south, bottom
+    lightC.lookAt(0, 0, 0)
+    scene.add(lightC)
 
     return await new Promise((resolve, reject) => {
         const exporter = new GLTFExporter()
