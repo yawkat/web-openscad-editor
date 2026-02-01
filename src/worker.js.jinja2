@@ -109,17 +109,65 @@ function uint8ArrayToArrayBuffer(bytes) {
 }
 
 async function stlBytesToGlb(stlBytes) {
-    const geometry = new STLLoader().parse(uint8ArrayToArrayBuffer(stlBytes))
+    let geometry = new STLLoader().parse(uint8ArrayToArrayBuffer(stlBytes))
+    if (geometry.index) {
+        // STL is typically non-indexed, but if we ever get indexed geometry,
+        // convert to non-indexed so per-triangle vertex colors are stable.
+        geometry = geometry.toNonIndexed()
+    }
     if (!geometry.getAttribute("normal")) {
         geometry.computeVertexNormals()
     }
 
+    // Add simple depth cueing: tint triangles based on their Z position.
+    // This makes pockets easier to read without AO.
+    {
+        const pos = geometry.getAttribute("position")
+        if (pos && pos.count >= 3) {
+            let minZ = Infinity
+            let maxZ = -Infinity
+            for (let i = 0; i < pos.count; i++) {
+                const z = pos.getZ(i)
+                if (z < minZ) minZ = z
+                if (z > maxZ) maxZ = z
+            }
+
+            const range = maxZ - minZ
+            if (isFinite(range) && range > 0) {
+                // this logic shades faces based on Z position to make pockets easier to distinguish
+
+                // Base material color is 0x9aa3ad; these are subtle tints around it.
+                const topColor = new THREE.Color(0x63696f)
+                const bottomColor = new THREE.Color(0xc4d0dd)
+
+                const colors = new Float32Array(pos.count * 3)
+                // geometry is non-indexed, so each triangle is 3 consecutive vertices.
+                for (let i = 0; i < pos.count; i += 3) {
+                    const z0 = pos.getZ(i)
+                    const z1 = pos.getZ(i + 1)
+                    const z2 = pos.getZ(i + 2)
+                    const z = Math.min(z0, z1, z2)
+                    const t = (z - minZ) / range
+
+                    const c = bottomColor.clone().lerp(topColor, t)
+                    for (let j = 0; j < 3; j++) {
+                        const k = (i + j) * 3
+                        colors[k] = c.r
+                        colors[k + 1] = c.g
+                        colors[k + 2] = c.b
+                    }
+                }
+                geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
+            }
+        }
+    }
+
     const material = new THREE.MeshStandardMaterial({
-        color: 0x9aa3ad,
+        color: 0xc4d0dd,
         metalness: 0.8,
         roughness: 0.4,
         flatShading: true,
-        vertexColors: geometry.hasAttribute("color"),
+        vertexColors: true,
     })
     const mesh = new THREE.Mesh(geometry, material)
     // OpenSCAD uses mm; glTF uses meters.
@@ -129,20 +177,25 @@ async function stlBytesToGlb(stlBytes) {
     scene.add(mesh)
 
     // Add a few basic lights so the exported GLB shades nicely even without an HDR environment.
-    const lightA = new THREE.DirectionalLight(0xD60270, 20) // pink
+    const lightA = new THREE.DirectionalLight(0xd6629e, 20) // pink
     lightA.position.set(1000, 1000, 1000) // north east, top
     lightA.lookAt(0, 0, 0)
     scene.add(lightA)
 
-    const lightB = new THREE.DirectionalLight(0x0038A8, 20) // blue
+    const lightB = new THREE.DirectionalLight(0x5571a8, 20) // blue
     lightB.position.set(-1000, 1000, 1000) // north west, top
     lightB.lookAt(0, 0, 0)
     scene.add(lightB)
 
-    const lightC = new THREE.DirectionalLight(0x9B4F96, 15) // purple
+    const lightC = new THREE.DirectionalLight(0xbf86bb, 15) // purple
     lightC.position.set(0, -1000, -1000) // south, bottom
     lightC.lookAt(0, 0, 0)
     scene.add(lightC)
+
+    const lightD = new THREE.DirectionalLight(0xbf86bb, 15) // purple
+    lightD.position.set(0, -1000, 1000) // south, top
+    lightD.lookAt(0, 0, 0)
+    scene.add(lightD)
 
     return await new Promise((resolve, reject) => {
         const exporter = new GLTFExporter()
