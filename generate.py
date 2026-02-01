@@ -177,6 +177,16 @@ def main():
     fs: typing.Dict[str, bytes] = {}
     for entry in scad_entries:
         load_scad_recursively(entry["host_path"], scad_root, fs)
+
+    # Bundle a minimal fontconfig setup and a small font set.
+    # The OpenSCAD WASM build does not include a system-wide fontconfig config,
+    # so without this, text() rendering emits:
+    #   Fontconfig error: Cannot load default config file
+    # and then falls back to missing fonts.
+    try:
+        add_default_fonts(fs)
+    except Exception as e:
+        print(f"Warning: failed to bundle fonts: {e}")
     try:
         os.makedirs(args.output)
     except FileExistsError:
@@ -313,6 +323,160 @@ def load_scad_recursively(host_path: str, root: str, fs: typing.Dict[str, bytes]
                 root,
                 fs,
             )
+
+
+def add_default_fonts(fs: typing.Dict[str, bytes]):
+    # Provide a minimal fontconfig config file.
+    # This is intentionally tiny (the heavy lifting is the font files).
+    if "/fonts/fonts.conf" not in fs:
+        fs["/fonts/fonts.conf"] = (
+            b'<?xml version="1.0" encoding="UTF-8"?>\n'
+            b'<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n'
+            b"<fontconfig>\n"
+            b"  <dir>/fonts</dir>\n"
+            b"  <cachedir>/tmp/fontconfig</cachedir>\n"
+            b"</fontconfig>\n"
+        )
+
+    font_source = (os.environ.get("OPENSCAD_FONT_SOURCE") or "auto").strip().lower()
+    if font_source not in {"auto", "appimage", "system"}:
+        font_source = "auto"
+
+    # Default behavior:
+    # - GitHub Action/CI: use the AppImage bundled with the action.
+    # - Local runs: you can set OPENSCAD_FONT_SOURCE=system to embed
+    #   fonts from /usr/share/fonts (Arch Linux paths).
+    if font_source in {"auto", "appimage"}:
+        try:
+            add_fonts_from_appimage(fs)
+            return
+        except Exception:
+            if font_source == "appimage":
+                raise
+
+    add_fonts_from_system(fs)
+
+
+def _collect_font_candidates(root: str) -> typing.List[str]:
+    out: typing.List[str] = []
+    if not os.path.isdir(root):
+        return out
+    for base, _, files in os.walk(root):
+        for fn in files:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in [".ttf", ".otf", ".ttc"]:
+                out.append(os.path.join(base, fn))
+    return out
+
+
+def _pick_common_fonts(candidates: typing.List[str]) -> typing.List[str]:
+    # Prefer common families. On Arch, these typically come from packages like:
+    # - ttf-dejavu
+    # - ttf-liberation
+    # - noto-fonts
+    preferred_basenames = [
+        "LiberationSans-Regular.ttf",
+        "LiberationSans-Bold.ttf",
+        "LiberationSans-Italic.ttf",
+        "LiberationSans-BoldItalic.ttf",
+        "LiberationSerif-Regular.ttf",
+        "LiberationSerif-Bold.ttf",
+        "LiberationMono-Regular.ttf",
+        "LiberationMono-Bold.ttf",
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf",
+        "DejaVuSans-Oblique.ttf",
+        "DejaVuSans-BoldOblique.ttf",
+        "DejaVuSerif.ttf",
+        "DejaVuSerif-Bold.ttf",
+        "DejaVuSansMono.ttf",
+        "DejaVuSansMono-Bold.ttf",
+    ]
+
+    by_base: typing.Dict[str, str] = {}
+    for p in candidates:
+        by_base.setdefault(os.path.basename(p), p)
+
+    ordered: typing.List[str] = []
+    for base in preferred_basenames:
+        p = by_base.get(base)
+        if p:
+            ordered.append(p)
+
+    if not ordered:
+        ordered = sorted(candidates)[:16]
+    return ordered[:32]
+
+
+def _write_fonts_into_fs(fs: typing.Dict[str, bytes], paths: typing.List[str]):
+    used_names: typing.Set[str] = set()
+    for p in paths:
+        name = os.path.basename(p)
+        if name in used_names:
+            stem, ext = os.path.splitext(name)
+            i = 2
+            while f"{stem}-{i}{ext}" in used_names:
+                i += 1
+            name = f"{stem}-{i}{ext}"
+        used_names.add(name)
+        with open(p, "rb") as f:
+            fs["/fonts/" + name] = f.read()
+
+
+def add_fonts_from_system(fs: typing.Dict[str, bytes]):
+    # Arch Linux system font locations.
+    candidates: typing.List[str] = []
+    for root in [
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        os.path.expanduser("~/.local/share/fonts"),
+    ]:
+        candidates.extend(_collect_font_candidates(root))
+    if not candidates:
+        raise RuntimeError("No system fonts found (checked /usr/share/fonts etc.)")
+    _write_fonts_into_fs(fs, _pick_common_fonts(candidates))
+
+
+def add_fonts_from_appimage(fs: typing.Dict[str, bytes]):
+    appimage_path = os.environ.get("OPENSCAD_APPIMAGE")
+    if not appimage_path:
+        version = (
+            os.environ.get("OPENSCAD_VERSION")
+            or os.environ.get("openscad-version")
+            or "2026.01.19"
+        )
+        appimage_path = os.path.join(
+            os.getcwd(),
+            ".openscad-cache",
+            f"OpenSCAD-{version}-x86_64.AppImage",
+        )
+    if not os.path.exists(appimage_path):
+        raise FileNotFoundError(
+            f"OpenSCAD AppImage not found at {appimage_path}. Set OPENSCAD_APPIMAGE to override."
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(
+            [appimage_path, "--appimage-extract"],
+            check=True,
+            cwd=tmp,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        squashfs_root = os.path.join(tmp, "squashfs-root")
+        if not os.path.isdir(squashfs_root):
+            raise RuntimeError("Failed to extract AppImage (missing squashfs-root)")
+
+        candidates: typing.List[str] = []
+        for base in [
+            os.path.join(squashfs_root, "usr", "share", "fonts"),
+            os.path.join(squashfs_root, "usr", "local", "share", "fonts"),
+            os.path.join(squashfs_root, "usr", "lib", "fonts"),
+        ]:
+            candidates.extend(_collect_font_candidates(base))
+        if not candidates:
+            raise RuntimeError("No fonts found in extracted AppImage")
+        _write_fonts_into_fs(fs, _pick_common_fonts(candidates))
 
 
 if __name__ == "__main__":

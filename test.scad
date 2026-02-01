@@ -18,6 +18,14 @@ hole_count = 6; // [0:1:24]
 show_baseplate = true;
 baseplate_thickness = 2; // [0:0.5:10]
 
+show_text = true;
+text_string = "web-openscad-editor";
+text_font = "DejaVu Sans:style=Bold";
+text_size = 8; // [2:0.5:24]
+text_depth = 1.2; // [0.2:0.1:5]
+text_z_offset = 0.2; // [-2:0.1:4]
+text_anchor = "center"; // [center, left, right]
+
 /* [Hidden] */
 
 $fn = 72;
@@ -59,6 +67,21 @@ module bolt_holes(count, d, r, h) {
           cylinder(d = d, h = h + 0.2);
 }
 
+module label_3d(str, font, size, depth, anchor) {
+  // Use fontconfig-backed text() rendering.
+  // If fonts are not available in the WASM build, this will warn about missing fonts.
+  // We extrude slightly to make it visible in the exported mesh.
+  linear_extrude(height = depth)
+    text(
+      text = str,
+      size = size,
+      font = font,
+      halign = anchor,
+      valign = "center",
+      $fn = 24
+    );
+}
+
 model_h = height;
 
 difference() {
@@ -73,6 +96,12 @@ difference() {
     if (show_baseplate && baseplate_thickness > 0)
       translate([0, 0, -baseplate_thickness])
         rounded_box(width * 1.1, depth * 1.1, baseplate_thickness, rounding);
+
+    if (show_text) {
+      // Put text on the top face.
+      translate([0, 0, model_h + text_z_offset])
+        label_3d(text_string, text_font, text_size, text_depth, text_anchor);
+    }
   }
 
   bolt_holes(hole_count, hole_diameter, min(width, depth) * 0.35, model_h)

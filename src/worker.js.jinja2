@@ -220,6 +220,17 @@ async function createInstance() {
         print: logInfo,
         printErr: logInfo,
     })
+
+    // OpenSCAD uses fontconfig for text() rendering.
+    // In WASM there is no system fontconfig, so we ship a small config + fonts.
+    // The Emscripten runtime exposes process environment via instance.ENV.
+    // Set this before calling into OpenSCAD.
+    if (instance.ENV) {
+        instance.ENV.FONTCONFIG_PATH = "/fonts"
+        instance.ENV.FONTCONFIG_FILE = "/fonts/fonts.conf"
+        instance.ENV.HOME = "/tmp"
+    }
+    instance.FS.mkdirTree("/tmp/fontconfig")
     {% for k, v in fs.items() %}
     {
         const data = base64ToUint8Array("{{ v }}")

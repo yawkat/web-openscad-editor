@@ -134,6 +134,8 @@ runs:
 
         echo "$PWD" >> "$GITHUB_PATH"
         echo "OPENSCAD_WASM_DIR=$PWD/openscad-wasm" >> "$GITHUB_ENV"
+        echo "OPENSCAD_APPIMAGE=$PWD/$appimage" >> "$GITHUB_ENV"
+        echo "OPENSCAD_VERSION=$version" >> "$GITHUB_ENV"
 
     - name: Install Python dependencies
       working-directory: ${{ github.action_path }}
