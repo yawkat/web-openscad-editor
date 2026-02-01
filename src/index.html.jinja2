@@ -58,6 +58,22 @@
                 overflow: auto;
             }
         }
+
+        .customizer-group .form-control,
+        .customizer-group .form-select,
+        .customizer-group .input-group-text {
+            transition: background-color 120ms ease-in-out;
+        }
+
+        .customizer-group.is-modified .form-control,
+        .customizer-group.is-modified .form-select,
+        .customizer-group.is-modified .input-group-text {
+            background-color: #fff7e0;
+        }
+
+        .customizer-reset svg {
+            display: block;
+        }
     </style>
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
     <script type="module">
@@ -217,6 +233,39 @@
             });
         }
 
+        function isParamModified(name) {
+            if (!(name in defaultCustomization)) {
+                return false;
+            }
+            const defaultValue = defaultCustomization[name];
+            const currentValue = currentCustomization[name];
+            if (Array.isArray(defaultValue)) {
+                const maxLen = Math.max(defaultValue.length, Array.isArray(currentValue) ? currentValue.length : 0);
+                for (let i = 0; i < maxLen; i++) {
+                    if (!jsonEqual(currentValue?.[i], defaultValue?.[i])) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return !jsonEqual(currentValue, defaultValue);
+        }
+
+        function syncCustomizationIndicators() {
+            for (const group of document.querySelectorAll(".customizer-group")) {
+                const name = group.getAttribute("attr-name");
+                if (!name) {
+                    continue;
+                }
+                const modified = isParamModified(name);
+                group.classList.toggle("is-modified", modified);
+                const btn = group.querySelector(".customizer-reset");
+                if (btn) {
+                    btn.disabled = !modified;
+                }
+            }
+        }
+
         function applyCustomizationToInputs() {
             for (const input of document.querySelectorAll(".customizer")) {
                 const name = input.getAttribute("attr-name");
@@ -252,6 +301,8 @@
                     input.value = String(value);
                 }
             }
+
+            syncCustomizationIndicators();
         }
 
         function restoreCustomizationFromHash(hashString, {normalizeUrl = false} = {}) {
@@ -316,6 +367,19 @@
                     currentCustomization[name] = value;
                 }
 
+                updateUrlFromCustomization();
+                syncCustomizationIndicators();
+            });
+        }
+
+        for (const btn of document.querySelectorAll(".customizer-reset")) {
+            btn.addEventListener("click", () => {
+                const name = btn.getAttribute("attr-name");
+                if (!name || !(name in defaultCustomization)) {
+                    return;
+                }
+                currentCustomization[name] = JSON.parse(JSON.stringify(defaultCustomization[name]));
+                applyCustomizationToInputs();
                 updateUrlFromCustomization();
             });
         }
@@ -436,6 +500,15 @@
             {% endfor %}
         {% endif %}
     </p>
+    {% macro render_reset_button(name) %}
+        <button class="btn btn-outline-secondary customizer-reset" type="button" attr-name="{{ name }}" disabled aria-label="Revert to default" title="Revert to default">
+            <svg class="lucide lucide-rotate-ccw" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+            </svg>
+            <span class="visually-hidden">Revert to default</span>
+        </button>
+    {% endmacro %}
     {% macro render_param(param) %}
         {% set pid = "parameter_" + param['name'] %}
         <div class="col-12">
@@ -444,29 +517,44 @@
         </div>
         <div class="col-12 mb-3">
             {% if param['type'] == 'number' and param['initial'] is iterable %}
-                <div class="input-group">
+                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
                     {% for initial in param['initial'] %}
                         <input class="form-control customizer" type="number"{% if loop.index0 == 0 %}
                                id="{{ pid }}"{% endif %} value="{{ initial }}" attr-name="{{ param['name'] }}"
                                attr-index="{{ loop.index0 }}" autocomplete="off">
                     {% endfor %}
+                    {{ render_reset_button(param['name']) }}
                 </div>
             {% elif param['options'] %}
-                <select class="form-control customizer" id="{{ pid }}" attr-name="{{ param['name'] }}" autocomplete="off">
-                    {% for option in param['options'] %}
-                        <option value='{{ option['value'] | json_dump }}'
-                                {% if option['value'] == param['initial'] %}selected{% endif %}>{{ option['name'] }}</option>
-                    {% endfor %}
-                </select>
+                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
+                    <select class="form-select customizer" id="{{ pid }}" attr-name="{{ param['name'] }}" autocomplete="off">
+                        {% for option in param['options'] %}
+                            <option value='{{ option['value'] | json_dump }}'
+                                    {% if option['value'] == param['initial'] %}selected{% endif %}>{{ option['name'] }}</option>
+                        {% endfor %}
+                    </select>
+                    {{ render_reset_button(param['name']) }}
+                </div>
             {% elif param['type'] == 'number' %}
-                <input class="form-control customizer" type="number" id="{{ pid }}" value="{{ param['initial'] }}"
-                       attr-name="{{ param['name'] }}" autocomplete="off">
+                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
+                    <input class="form-control customizer" type="number" id="{{ pid }}" value="{{ param['initial'] }}"
+                           attr-name="{{ param['name'] }}" autocomplete="off">
+                    {{ render_reset_button(param['name']) }}
+                </div>
             {% elif param['type'] == 'boolean' %}
-                <input class="form-check-input customizer" type="checkbox" id="{{ pid }}"
-                       {% if param['initial'] %}checked{% endif %} attr-name="{{ param['name'] }}" autocomplete="off">
+                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
+                    <div class="input-group-text">
+                        <input class="form-check-input mt-0 customizer" type="checkbox" id="{{ pid }}"
+                               {% if param['initial'] %}checked{% endif %} attr-name="{{ param['name'] }}" autocomplete="off">
+                    </div>
+                    {{ render_reset_button(param['name']) }}
+                </div>
             {% else %}
-                <input class="form-control customizer" type="text" id="{{ pid }}" value="{{ param['initial'] }}"
-                       attr-name="{{ param['name'] }}" autocomplete="off">
+                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
+                    <input class="form-control customizer" type="text" id="{{ pid }}" value="{{ param['initial'] }}"
+                           attr-name="{{ param['name'] }}" autocomplete="off">
+                    {{ render_reset_button(param['name']) }}
+                </div>
             {% endif %}
         </div>
     {% endmacro %}

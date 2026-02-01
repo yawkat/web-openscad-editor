@@ -2,6 +2,8 @@
 
 This repo contains a small generator that turns an OpenSCAD file into a self-contained web export (HTML + worker + OpenSCAD WASM). Try it out [here](https://web-openscad-editor.yawk.at/)!
 
+Warning: Heavily vibe-coded.
+
 ## Use as a GitHub Action
 
 Example workflow:
