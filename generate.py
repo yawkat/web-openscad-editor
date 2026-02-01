@@ -25,7 +25,7 @@ def main():
         type=str,
         required=False,
         help=(
-            "JSON array of objects: [{file: <scad>, additional-params: [<param.json>, ...]}, ...]. "
+            "JSON array of objects: [{file: <scad>, additional-params: [<param.json>, ...], description-extra-html: <html>}, ...]. "
             "If prefixed with '@', the remainder is treated as a path to a JSON file."
         ),
     )
@@ -54,6 +54,15 @@ def main():
     )
     parser.add_argument("--project-name", type=str, required=False, default=None)
     parser.add_argument("--project-uri", type=str, required=False, default=None)
+    parser.add_argument(
+        "--description-extra-html",
+        type=str,
+        required=False,
+        default="",
+        help=(
+            "Optional additional HTML appended to the description paragraph (e.g. a docs link)."
+        ),
+    )
     parser.add_argument(
         "--export-filename-prefix", type=str, required=False, default=None
     )
@@ -112,10 +121,18 @@ def main():
                 additional = []
             if not isinstance(additional, list):
                 raise SystemExit("'additional-params' must be a list")
+
+            desc_extra = item.get("description-extra-html", None)
+            if desc_extra is None:
+                desc_extra = args.description_extra_html
+            if not isinstance(desc_extra, str):
+                raise SystemExit("'description-extra-html' must be a string")
+
             scad_configs.append(
                 {
                     "file": os.path.abspath(item["file"]),
                     "additional_params": [os.path.abspath(p) for p in additional],
+                    "description_extra_html": desc_extra,
                 }
             )
     else:
@@ -135,6 +152,7 @@ def main():
                     ]
                     if i == 0 and len(args.scad) == 1
                     else [],
+                    "description_extra_html": args.description_extra_html,
                 }
             )
 
@@ -171,6 +189,7 @@ def main():
                 "virtual_path": host_path_to_virtual(scad_root, scad_host_path),
                 "metadata": metadata,
                 "additional_parameters": additional_parameters,
+                "description_extra_html": cfg.get("description_extra_html", ""),
             }
         )
 
@@ -235,6 +254,7 @@ def main():
                     "additional_parameters": scad_entries[0]["additional_parameters"],
                     "input": scad_entries[0]["virtual_path"],
                     "output_html": "index.html",
+                    "description_extra_html": scad_entries[0]["description_extra_html"],
                 }
             )
             f.write(j2env.get_template("index.html.jinja2").render(**variables))
@@ -249,6 +269,7 @@ def main():
                     "additional_parameters": entry["additional_parameters"],
                     "input": entry["virtual_path"],
                     "output_html": output_html,
+                    "description_extra_html": entry["description_extra_html"],
                 }
             )
             with open(os.path.join(args.output, output_html), "w") as f:

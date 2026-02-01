@@ -8,7 +8,7 @@ inputs:
     required: false
     default: ""
   scad-json:
-    description: "Optional JSON array for multi-input: [{file: <scad>, additional-params: [<param.json>, ...]}, ...]. Overrides 'scad'."
+    description: "Optional JSON array for multi-input: [{file: <scad>, additional-params: [<param.json>, ...], description-extra-html: <html>}, ...]. Overrides 'scad'."
     required: false
   mode:
     description: "Output mode: single (index.html) or multi (per-file HTML + index list)"
@@ -40,6 +40,10 @@ inputs:
   project-uri:
     description: Project URI shown in the web export
     required: false
+  description-extra-html:
+    description: Optional extra HTML appended to the description paragraph (e.g. a docs link)
+    required: false
+    default: ""
   export-filename-prefix:
     description: Prefix for exported filenames
     required: false
@@ -185,6 +189,9 @@ runs:
         fi
         if [ -n '${{ inputs.project-uri }}' ]; then
           args+=(--project-uri '${{ inputs.project-uri }}')
+        fi
+        if [ -n '${{ inputs.description-extra-html }}' ]; then
+          args+=(--description-extra-html '${{ inputs.description-extra-html }}')
         fi
         if [ -n '${{ inputs.export-filename-prefix }}' ]; then
           args+=(--export-filename-prefix '${{ inputs.export-filename-prefix }}')

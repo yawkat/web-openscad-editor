@@ -23,7 +23,11 @@ jobs:
           scad-json: |
             [
               {"file": "path/to/model-a.scad"},
-              {"file": "path/to/model-b.scad", "additional-params": ["path/to/model-b.extra-params.json"]}
+              {
+                "file": "path/to/model-b.scad",
+                "additional-params": ["path/to/model-b.extra-params.json"],
+                "description-extra-html": " See <a href=\"https://example.com/docs/model-b\">docs</a>."
+              }
             ]
           mode: multi
           # optional:
@@ -35,6 +39,7 @@ jobs:
           # openscad-wasm-zip-sha256: <sha256>
           # project-name: My Project
           # project-uri: https://github.com/OWNER/REPO
+          # description-extra-html: " See <a href=\"https://example.com/docs\">docs</a>."  # for single-input
           # export-filename-prefix: my-project
           # uv-run-args: "--some-generator-flag value"
       - uses: actions/upload-artifact@v4
@@ -57,6 +62,7 @@ Defaults:
 - `project-name`: repository name (falls back to `PROJECT`)
 - `export-filename-prefix`: repository name (falls back to `openscad-export`)
 - `project-uri`: repository URL (falls back to `https://example.com/`)
+- `description-extra-html`: appended to the description paragraph (raw HTML; default empty). For multi-input, prefer per-entry `description-extra-html` in `scad-json`.
 - `openscad-version`: `2026.01.19` (downloads from `https://files.openscad.org/snapshots/`)
 - `mode`: `single`
 - `clean-urls`: `"true"` (action only; CLI default is off)

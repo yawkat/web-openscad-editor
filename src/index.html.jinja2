@@ -491,6 +491,9 @@
     <p class="mt-3">
         This is the model generator for <a href="{{ args.project_uri }}">{{ args.project_name }}</a>.
         Any changes you make are saved in the URL, so you can share that URL or create a bookmark to keep those changes around.
+        {% if description_extra_html %}
+            {{ description_extra_html | safe }}
+        {% endif %}
         {% if generators and generators|length > 1 %}
             Other generators:
             {% for g in generators %}

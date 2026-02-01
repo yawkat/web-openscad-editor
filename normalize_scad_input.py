@@ -35,6 +35,11 @@ def main() -> None:
                 raise SystemExit(
                     "'scad-json' entries must be objects with a 'file' key"
                 )
+
+            desc_extra = item.get("description-extra-html", None)
+            if desc_extra is not None and not isinstance(desc_extra, str):
+                raise SystemExit("'description-extra-html' must be a string")
+
             add = item.get("additional-params", [])
             if add is None:
                 add = []
@@ -43,6 +48,11 @@ def main() -> None:
             normalized.append(
                 {
                     "file": to_abs(workspace, str(item["file"])),
+                    **(
+                        {"description-extra-html": desc_extra}
+                        if isinstance(desc_extra, str) and desc_extra
+                        else {}
+                    ),
                     **(
                         {"additional-params": [to_abs(workspace, str(p)) for p in add]}
                         if add
