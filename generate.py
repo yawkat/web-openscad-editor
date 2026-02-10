@@ -162,7 +162,11 @@ def main():
     scad_entries: typing.List[typing.Dict[str, typing.Any]] = []
     for cfg in scad_configs:
         scad_host_path = cfg["file"]
-        with tempfile.NamedTemporaryFile("r") as f:
+        with tempfile.NamedTemporaryFile(
+            mode="r",
+            suffix=".json",
+            delete=False,
+        ) as f:
             run_openscad("-o", f.name, "--export-format=param", scad_host_path)
             metadata = json.load(f)
 
