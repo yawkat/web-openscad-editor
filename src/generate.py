@@ -83,7 +83,7 @@ def main():
 
     # Create ScadContext objects from config inputs
     contexts: typing.List[model.ScadContext] = []
-    for inp in config.model:
+    for inp in model.flatten_model_configs(config):
         inp.file = os.path.join(os.path.dirname(args.config), inp.file)
         inp.additional_params = [os.path.join(os.path.dirname(args.config), p) for p in inp.additional_params]
         ctx = model.ScadContext(inp, ParamsLoaderImpl())
