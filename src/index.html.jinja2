@@ -222,18 +222,18 @@
         });
 
         const defaultCustomization = {
-            {% for entry in ctx.combined_params() -%}
-                "{{ entry["name"] }}":
-                {%- if entry["type"] == "boolean" %}{% if entry["initial"] %}true{% else %}false{% endif %}
-                {%- elif entry["type"] == "string" %}"{{ entry["initial"] }}"
-                {%- else %}{{ entry["initial"] }}{% endif %},
+            {% for entry in ctx.params -%}
+                "{{ entry.name }}":
+                {%- if entry.definition["type"] == "boolean" %}{% if entry.definition["initial"] %}true{% else %}false{% endif %}
+                {%- elif entry.definition["type"] == "string" %}"{{ entry.definition["initial"] }}"
+                {%- else %}{{ entry.definition["initial"] }}{% endif %},
             {% endfor %}
         };
         const currentCustomization = JSON.parse(JSON.stringify(defaultCustomization));
         const additionalParamNames = [
-            {% for entry in ctx.combined_params() -%}
-                {%- if entry["origin"] == "additional" -%}
-                    {{ entry["name"] | json_dump }},
+            {% for entry in ctx.params -%}
+                {%- if entry.definition["origin"] == "additional" -%}
+                    {{ entry.name | json_dump }},
                 {%- endif -%}
             {%- endfor %}
         ];
@@ -669,71 +669,69 @@
     {% endmacro %}
 
     {% set state = namespace(current_group=None) %}
-    {% for param in ctx.combined_params() %}
-        {% if not state.current_group or param.get('group') != state.current_group.name %}
+    {% for param in ctx.params %}
+        {% if not state.current_group or param.group != state.current_group %}
             {% if state.current_group %}
                 </div> <!-- end of collapse -->
             {% endif %}
-            {% set state.current_group = ctx.group(param.get('group')) %}
-            <span class="group-header{% if state.current_group.config.collapsed %} collapsed{% endif %}" data-bs-target="#collapse-{{ state.current_group.id }}" data-bs-toggle="collapse"><h3><svg class="collapse-indicator" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 20 20" fill="currentColor" stroke="none"><path d="M 0 5 H 20 L 10 15 Z"/></svg>{{ state.current_group.name }}
+            {% set state.current_group = param.group %}
+            <h3 class="group-header{% if state.current_group.config.collapsed %} collapsed{% endif %}" data-bs-target="#collapse-{{ state.current_group.id }}" data-bs-toggle="collapse"><svg class="collapse-indicator" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 20 20" fill="currentColor" stroke="none"><path d="M 0 5 H 20 L 10 15 Z"/></svg>{{ state.current_group.name }}
                 {%- if state.current_group.config.help_link %}
                     {{ help_link(state.current_group.config.help_link) }}
                 {%- endif -%}
-            </h3></span>
+            </h3>
             <div class="collapse{% if not state.current_group.config.collapsed %} show{% endif %}" id="collapse-{{ state.current_group.id }}">
         {% endif %}
-        {% set pid = "parameter_" + param['name'] %}
-        <div class="col-12" data-parameter="{{ param['name'] }}">
+        {% set pid = "parameter_" + param.name %}
+        <div class="col-12" data-parameter="{{ param.name }}">
             <label for="{{ pid }}">
-                {% for piece in param['name'].split("_") -%}
+                {% for piece in param.name.split("_") -%}
                     {{ piece }}
                     {%- if not loop.last %}<span class="param_underscore">_</span>{% endif -%}
                 {%- endfor %}
-                {% if ctx.config.param_metadata[param['name']] is defined and ctx.config.param_metadata[param['name']].help_link -%}
-                    {{ help_link(ctx.config.param_metadata[param['name']].help_link) }}
-                {%- endif %}
-                {%- if param['caption'] is defined %}<br><span class="form-text">{{ param['caption'] }}</span>{% endif -%}
+                {% if param.metadata.help_link %}{{ help_link(param.metadata.help_link) }}{% endif %}
+                {%- if param.definition['caption'] is defined %}<br><span class="form-text">{{ param.definition['caption'] }}</span>{% endif -%}
             </label>
         </div>
-        <div class="col-12 mb-3" data-parameter="{{ param['name'] }}">
-            {% if param['type'] == 'number' and param["initial"] is iterable %}
-                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
-                    {% for initial in param["initial"] %}
+        <div class="col-12 mb-3" data-parameter="{{ param.name }}">
+            {% if param.definition['type'] == 'number' and param.definition["initial"] is iterable %}
+                <div class="input-group customizer-group" attr-name="{{ param.name }}">
+                    {% for initial in param.definition["initial"] %}
                         <input class="form-control customizer" type="number"{% if loop.index0 == 0 %}
-                               id="{{ pid }}"{% endif %} value="{{ initial }}" attr-name="{{ param['name'] }}"
+                               id="{{ pid }}"{% endif %} value="{{ initial }}" attr-name="{{ param.name }}"
                                attr-index="{{ loop.index0 }}" autocomplete="off">
                     {% endfor %}
-                    {{ render_param_common(param['name']) }}
+                    {{ render_param_common(param.name) }}
                 </div>
-            {% elif param['options'] is defined %}
-                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
-                    <select class="form-select customizer" id="{{ pid }}" attr-name="{{ param['name'] }}" autocomplete="off">
-                        {% for option in param['options'] %}
+            {% elif param.definition['options'] is defined %}
+                <div class="input-group customizer-group" attr-name="{{ param.name }}">
+                    <select class="form-select customizer" id="{{ pid }}" attr-name="{{ param.name }}" autocomplete="off">
+                        {% for option in param.definition['options'] %}
                             <option value='{{ option['value'] | json_dump }}'
-                                    {% if option['value'] == param["initial"] %}selected{% endif %}>{{ option['name'] }}</option>
+                                    {% if option['value'] == param.definition["initial"] %}selected{% endif %}>{{ option['name'] }}</option>
                         {% endfor %}
                     </select>
-                    {{ render_param_common(param['name']) }}
+                    {{ render_param_common(param.name) }}
                 </div>
-            {% elif param['type'] == 'number' %}
-                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
-                    <input class="form-control customizer" type="number" id="{{ pid }}" value="{{ param["initial"] }}"
-                           attr-name="{{ param['name'] }}" autocomplete="off">
-                    {{ render_param_common(param['name']) }}
+            {% elif param.definition['type'] == 'number' %}
+                <div class="input-group customizer-group" attr-name="{{ param.name }}">
+                    <input class="form-control customizer" type="number" id="{{ pid }}" value="{{ param.definition["initial"] }}"
+                           attr-name="{{ param.name }}" autocomplete="off">
+                    {{ render_param_common(param.name) }}
                 </div>
-            {% elif param['type'] == 'boolean' %}
-                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
+            {% elif param.definition['type'] == 'boolean' %}
+                <div class="input-group customizer-group" attr-name="{{ param.name }}">
                     <div class="input-group-text">
                         <input class="form-check-input mt-0 customizer" type="checkbox" id="{{ pid }}"
-                               {% if param["initial"] %}checked{% endif %} attr-name="{{ param['name'] }}" autocomplete="off">
+                               {% if param.definition["initial"] %}checked{% endif %} attr-name="{{ param.name }}" autocomplete="off">
                     </div>
-                    {{ render_param_common(param['name']) }}
+                    {{ render_param_common(param.name) }}
                 </div>
             {% else %}
-                <div class="input-group customizer-group" attr-name="{{ param['name'] }}">
-                    <input class="form-control customizer" type="text" id="{{ pid }}" value="{{ param["initial"] }}"
-                           attr-name="{{ param['name'] }}" autocomplete="off">
-                    {{ render_param_common(param['name']) }}
+                <div class="input-group customizer-group" attr-name="{{ param.name }}">
+                    <input class="form-control customizer" type="text" id="{{ pid }}" value="{{ param.definition["initial"] }}"
+                           attr-name="{{ param.name }}" autocomplete="off">
+                    {{ render_param_common(param.name) }}
                 </div>
             {% endif %}
         </div>

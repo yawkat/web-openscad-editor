@@ -70,4 +70,4 @@ runs:
         fi
         args+=(--output "$out_path")
 
-        uv run python generate.py "${args[@]}"
+        uv run python src/generate.py "${args[@]}"

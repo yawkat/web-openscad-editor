@@ -5,13 +5,25 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "jinja2>=3.1.6",
-    "pytest>=9.0.2",
     "pydantic>=2.0.0",
     "datamodel-code-generator>=0.53.0",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
 [tool.datamodel-codegen]
 input = "config-schema.json"
-output = "config_generated.py"
+output = "src/config_generated.py"
 output-model-type = "pydantic_v2.BaseModel"
 field-constraints = true
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+pythonpath = [
+    "src"
+]

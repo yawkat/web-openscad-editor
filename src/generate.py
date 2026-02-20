@@ -9,9 +9,9 @@ import base64
 import jinja2
 import shutil
 import hashlib
-import functools
 import tomllib
 
+import model
 import config_generated
 
 
@@ -37,73 +37,6 @@ def download(file: str, uri: str, sha256: typing.Optional[str] = None):
             raise RuntimeError(f"SHA256 mismatch for {file}: expected {sha256}, got {actual_sha256}")
     os.rename(file + ".tmp", file)
 
-
-ParamSet = typing.Sequence[typing.Mapping[str, typing.Any]]
-
-def extract_params(openscad_file: str) -> ParamSet:
-    with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as f:
-        run_openscad("-o", f.name, "--export-format=param", openscad_file)
-        return json.load(f)["parameters"]
-
-class ScadContext:
-    def __init__(
-            self,
-            config: config_generated.ModelItem
-    ):
-        self.config = config
-        self.html_file = self.name() + ".html"
-        self.link = self.html_file
-        self.relative: str = ""  # Set later in main()
-
-    @functools.cache
-    def load_own_params(self) -> ParamSet:
-        return extract_params(self.config.file)
-
-    @functools.cache
-    def load_additional_params(self) -> ParamSet:
-        seq = []
-        for path in self.config.additional_params:
-            with open(path, "r", encoding="utf-8") as f:
-                seq.extend(json.load(f)["parameters"])
-        for path in self.config.additional_params_scad:
-            seq.extend(extract_params(path))
-        return seq
-
-    @functools.cache
-    def combined_params(self) -> ParamSet:
-        combined = []
-
-        def add(param, origin):
-            param = dict(param)
-            # if a parameter exists twice, drop the first one, but keep that default value.
-            for i, existing in enumerate(combined):
-                if existing["name"] == param["name"]:
-                    combined.pop(i)
-                    param["initial"] = existing["initial"]
-                    break
-            param["origin"] = origin
-            combined.append(param)
-
-        for p in self.load_own_params():
-            add(p, "own")
-        for p in self.load_additional_params():
-            add(p, "additional")
-        return combined
-
-    def name(self):
-        return os.path.basename(self.config.file).removesuffix(".scad")
-
-    def group(self, name: str) -> "GroupInfo":
-        return GroupInfo(self, name)
-
-class GroupInfo:
-    def __init__(self, context: ScadContext, name: str):
-        self.name = name
-        self.config = context.config.tab_metadata.get(name, config_generated.TabMetadata())
-        self.id = hashlib.sha256(name.encode("utf-8")).hexdigest()
-
-    def __eq__(self, other):
-        return self.name == other.name
 
 def main():
     parser = argparse.ArgumentParser(
@@ -138,12 +71,22 @@ def main():
     download("build/openscad.AppImage", "https://files.openscad.org/snapshots/OpenSCAD-" + config.openscad.version + "-x86_64.AppImage", config.openscad.sha256_appimage)
     os.chmod("build/openscad.AppImage", 0o755)
 
+    class ParamsLoaderImpl(model.ParamsLoader):
+        def load_json(self, declared_path: str) -> model.ParamSet:
+            with open(declared_path, "r", encoding="utf-8") as f:
+                return json.load(f)["parameters"]
+
+        def load_scad(self, declared_path: str) -> model.ParamSet:
+            with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as f:
+                run_openscad("-o", f.name, "--export-format=param", declared_path)
+                return json.load(f)["parameters"]
+
     # Create ScadContext objects from config inputs
-    contexts: typing.List[ScadContext] = []
+    contexts: typing.List[model.ScadContext] = []
     for inp in config.model:
         inp.file = os.path.join(os.path.dirname(args.config), inp.file)
         inp.additional_params = [os.path.join(os.path.dirname(args.config), p) for p in inp.additional_params]
-        ctx = ScadContext(inp)
+        ctx = model.ScadContext(inp, ParamsLoaderImpl())
         contexts.append(ctx)
 
     scad_root = os.path.commonpath([os.path.dirname(p.config.file) for p in contexts])
@@ -169,7 +112,7 @@ def main():
     except FileExistsError:
         pass
     j2env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(os.path.dirname(__file__) + "/src"),
+        loader=jinja2.FileSystemLoader(os.path.dirname(__file__)),
         undefined=jinja2.StrictUndefined,
     )
     j2env.filters["json_dump"] = json.dumps
