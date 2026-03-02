@@ -10,6 +10,13 @@ import { getModelConfig } from "./modelConfig.js";
 import { getDomRefs } from "./dom.js";
 import { createCustomizationController } from "./customization.js";
 import { createRenderer } from "./rendering.js";
+import {
+    loadProfilesState,
+    saveProfilesState,
+    sanitizeCustomization,
+    createProfileId,
+    renderProfilesSelect,
+} from "./profiles.js";
 
 const config = getModelConfig();
 const dom = getDomRefs();
@@ -25,6 +32,132 @@ const customization = createCustomizationController({
         renderer.triggerAutoRender();
     },
 });
+
+function getBareHash() {
+    const h = window.location.hash;
+    return !h || h === "#" ? "" : h;
+}
+
+function isBareEditorLoad() {
+    return getBareHash() === "";
+}
+
+function initProfilesUi() {
+    const select = dom.profileSelect;
+    if (!select) {
+        return;
+    }
+    let state = loadProfilesState();
+    renderProfilesSelect(select, state);
+
+    function getSelectedId() {
+        return select.value || "";
+    }
+
+    function getSelectedProfile() {
+        const id = getSelectedId();
+        return id && state.profiles[id] ? state.profiles[id] : null;
+    }
+
+    function syncButtons() {
+        const hasSelection = !!getSelectedProfile();
+        if (dom.profileSaveButton) dom.profileSaveButton.disabled = !hasSelection;
+        if (dom.profileDeleteButton) dom.profileDeleteButton.disabled = !hasSelection;
+        if (dom.profileSetDefaultButton) dom.profileSetDefaultButton.disabled = !hasSelection;
+    }
+
+    function rerender() {
+        state = loadProfilesState();
+        renderProfilesSelect(select, state);
+        syncButtons();
+    }
+
+    if (isBareEditorLoad() && state.defaultProfileId && state.profiles[state.defaultProfileId]) {
+        const prof = state.profiles[state.defaultProfileId];
+        const sanitized = sanitizeCustomization(prof.customization, config.defaultCustomization);
+        customization.applyCustomization(sanitized);
+    }
+
+    select.addEventListener("change", () => {
+        const prof = getSelectedProfile();
+        if (prof) {
+            const sanitized = sanitizeCustomization(prof.customization, config.defaultCustomization);
+            customization.applyCustomization(sanitized);
+        }
+        syncButtons();
+    });
+
+    if (dom.profileNewButton) {
+        dom.profileNewButton.addEventListener("click", () => {
+            const nameRaw = window.prompt("Profile name:");
+            if (nameRaw === null) {
+                return;
+            }
+            const name = nameRaw.trim();
+            if (!name) {
+                return;
+            }
+            const id = createProfileId();
+            const state2 = loadProfilesState();
+            state2.profiles[id] = {
+                name: name.slice(0, 120),
+                customization: sanitizeCustomization(customization.getCurrentCustomization(), config.defaultCustomization),
+            };
+            saveProfilesState(state2);
+            rerender();
+            select.value = id;
+            syncButtons();
+        });
+    }
+
+    if (dom.profileSaveButton) {
+        dom.profileSaveButton.addEventListener("click", () => {
+            const id = getSelectedId();
+            if (!id || !state.profiles[id]) {
+                return;
+            }
+            const state2 = loadProfilesState();
+            const existing = state2.profiles[id];
+            if (!existing) {
+                return;
+            }
+            existing.customization = sanitizeCustomization(customization.getCurrentCustomization(), config.defaultCustomization);
+            saveProfilesState(state2);
+            rerender();
+        });
+    }
+
+    if (dom.profileDeleteButton) {
+        dom.profileDeleteButton.addEventListener("click", () => {
+            const id = getSelectedId();
+            if (!id || !state.profiles[id]) {
+                return;
+            }
+            const state2 = loadProfilesState();
+            delete state2.profiles[id];
+            if (state2.defaultProfileId === id) {
+                state2.defaultProfileId = null;
+            }
+            saveProfilesState(state2);
+            rerender();
+        });
+    }
+
+    if (dom.profileSetDefaultButton) {
+        dom.profileSetDefaultButton.addEventListener("click", () => {
+            const id = getSelectedId();
+            if (!id || !state.profiles[id]) {
+                return;
+            }
+            const state2 = loadProfilesState();
+            state2.defaultProfileId = id;
+            saveProfilesState(state2);
+            rerender();
+        });
+    }
+
+    syncButtons();
+}
 
 renderer = createRenderer({
     workerUrl: config.workerUrl,
@@ -74,5 +207,6 @@ navigation.addEventListener("navigate", (event) => {
 
 window.addEventListener("load", () => {
     customization.restoreFromHash(window.location.hash, { normalizeUrl: true });
+    initProfilesUi();
     renderer.startRender();
 });
