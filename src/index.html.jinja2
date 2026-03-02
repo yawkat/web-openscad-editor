@@ -190,13 +190,7 @@
             <input class="form-check-input" type="checkbox" id="auto-render" checked>
             Auto Render
         </label>
-        <div class="btn-group" role="group" aria-label="Profiles">
-            <select id="profile-select" class="btn btn-secondary"></select>
-            <button id="profile-new" type="button" class="btn btn-secondary">New</button>
-            <button id="profile-save" type="button" class="btn btn-secondary">Save</button>
-            <button id="profile-delete" type="button" class="btn btn-secondary">Delete</button>
-            <button id="profile-set-default" type="button" class="btn btn-secondary">Default</button>
-        </div>
+        <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#profiles-modal">Profiles</button>
         <button id="download-stl" type="button" class="btn btn-secondary">Save STL</button>
         <div id="render-error" class="alert alert-danger mt-2 d-none" role="alert">
             <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
@@ -356,6 +350,30 @@
             </div>
             <div class="modal-footer">
                 <button id="render-error-copy" type="button" class="btn btn-outline-secondary">Copy</button>
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="profiles-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h1 class="modal-title fs-5">Profiles</h1>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <label for="profile-select" class="form-label">Saved profiles</label>
+                <select id="profile-select" class="form-select"></select>
+                <label for="profile-name" class="form-label mt-3">New profile name</label>
+                <input id="profile-name" type="text" class="form-control" autocomplete="off">
+            </div>
+            <div class="modal-footer">
+                <button id="profile-new" type="button" class="btn btn-secondary">New</button>
+                <button id="profile-save" type="button" class="btn btn-secondary">Save</button>
+                <button id="profile-delete" type="button" class="btn btn-secondary">Delete</button>
+                <button id="profile-set-default" type="button" class="btn btn-secondary">Default</button>
                 <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>

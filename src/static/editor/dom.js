@@ -12,6 +12,7 @@ export function getDomRefs() {
         downloadStlButton: document.getElementById("download-stl"),
         autoRenderCheckbox: document.getElementById("auto-render"),
         profileSelect: document.getElementById("profile-select"),
+        profileNameInput: document.getElementById("profile-name"),
         profileSaveButton: document.getElementById("profile-save"),
         profileNewButton: document.getElementById("profile-new"),
         profileDeleteButton: document.getElementById("profile-delete"),

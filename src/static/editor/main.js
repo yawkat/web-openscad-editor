@@ -89,11 +89,7 @@ function initProfilesUi() {
 
     if (dom.profileNewButton) {
         dom.profileNewButton.addEventListener("click", () => {
-            const nameRaw = window.prompt("Profile name:");
-            if (nameRaw === null) {
-                return;
-            }
-            const name = nameRaw.trim();
+            const name = (dom.profileNameInput?.value ?? "").trim();
             if (!name) {
                 return;
             }
@@ -106,6 +102,9 @@ function initProfilesUi() {
             saveProfilesState(state2);
             rerender();
             select.value = id;
+            if (dom.profileNameInput) {
+                dom.profileNameInput.value = "";
+            }
             syncButtons();
         });
     }
