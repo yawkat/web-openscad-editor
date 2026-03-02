@@ -25,6 +25,7 @@ def download(file: str, uri: str, sha256: typing.Optional[str] = None):
         return
     print(f"Downloading {uri} to {file}")
     import urllib.request
+
     try:
         os.makedirs(os.path.dirname(file))
     except FileExistsError:
@@ -34,7 +35,9 @@ def download(file: str, uri: str, sha256: typing.Optional[str] = None):
         with open(file, "rb") as f:
             actual_sha256 = hashlib.sha256(f.read()).hexdigest()
         if actual_sha256 != sha256:
-            raise RuntimeError(f"SHA256 mismatch for {file}: expected {sha256}, got {actual_sha256}")
+            raise RuntimeError(
+                f"SHA256 mismatch for {file}: expected {sha256}, got {actual_sha256}"
+            )
     os.rename(file + ".tmp", file)
 
 
@@ -64,11 +67,26 @@ def main():
 
     # Load configuration from TOML
     with open(args.config, "rb") as f:
-        config: config_generated.WebOpenscadEditorConfiguration = config_generated.WebOpenscadEditorConfiguration.model_validate(
-            tomllib.load(f))
+        config: config_generated.WebOpenscadEditorConfiguration = (
+            config_generated.WebOpenscadEditorConfiguration.model_validate(
+                tomllib.load(f)
+            )
+        )
 
-    download("build/openscad-wasm-web.zip", "https://files.openscad.org/snapshots/OpenSCAD-" + config.openscad.version + "-WebAssembly-web.zip", config.openscad.sha256_wasm_web)
-    download("build/openscad.AppImage", "https://files.openscad.org/snapshots/OpenSCAD-" + config.openscad.version + "-x86_64.AppImage", config.openscad.sha256_appimage)
+    download(
+        "build/openscad-wasm-web.zip",
+        "https://files.openscad.org/snapshots/OpenSCAD-"
+        + config.openscad.version
+        + "-WebAssembly-web.zip",
+        config.openscad.sha256_wasm_web,
+    )
+    download(
+        "build/openscad.AppImage",
+        "https://files.openscad.org/snapshots/OpenSCAD-"
+        + config.openscad.version
+        + "-x86_64.AppImage",
+        config.openscad.sha256_appimage,
+    )
     os.chmod("build/openscad.AppImage", 0o755)
 
     class ParamsLoaderImpl(model.ParamsLoader):
@@ -77,16 +95,25 @@ def main():
                 return json.load(f)["parameters"]
 
         def load_scad(self, declared_path: str) -> model.ParamSet:
-            with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as f:
-                enable_args = [f"--enable={feat}" for feat in (config.openscad.enable_features or [])]
-                run_openscad("-o", f.name, "--export-format=param", *enable_args, declared_path)
+            with tempfile.NamedTemporaryFile(
+                mode="r", suffix=".json", delete=False
+            ) as f:
+                enable_args = [
+                    f"--enable={feat}"
+                    for feat in (config.openscad.enable_features or [])
+                ]
+                run_openscad(
+                    "-o", f.name, "--export-format=param", *enable_args, declared_path
+                )
                 return json.load(f)["parameters"]
 
     # Create ScadContext objects from config inputs
     contexts: typing.List[model.ScadContext] = []
     for inp in model.flatten_model_configs(config):
         inp.file = os.path.join(os.path.dirname(args.config), inp.file)
-        inp.additional_params = [os.path.join(os.path.dirname(args.config), p) for p in inp.additional_params]
+        inp.additional_params = [
+            os.path.join(os.path.dirname(args.config), p) for p in inp.additional_params
+        ]
         ctx = model.ScadContext(inp, ParamsLoaderImpl())
         contexts.append(ctx)
 
@@ -122,6 +149,34 @@ def main():
         "config": config,
         "contexts": contexts,
     }
+
+    static_src = os.path.join(os.path.dirname(__file__), "static")
+    if os.path.isdir(static_src):
+        static_hash = hashlib.sha256()
+        for dirpath, dirnames, filenames in sorted(os.walk(static_src)):
+            dirnames.sort()
+            for filename in sorted(filenames):
+                filepath = os.path.join(dirpath, filename)
+                rel = os.path.relpath(filepath, static_src)
+                static_hash.update(rel.encode("utf-8"))
+                with open(filepath, "rb") as f:
+                    static_hash.update(f.read())
+        static_dir = f"static.{static_hash.hexdigest()[:12]}"
+
+        for entry in os.listdir(args.output):
+            if entry.startswith("static.") and entry != static_dir:
+                entry_path = os.path.join(args.output, entry)
+                if os.path.isdir(entry_path):
+                    shutil.rmtree(entry_path)
+
+        static_dest = os.path.join(args.output, static_dir)
+        if os.path.isdir(static_dest):
+            shutil.rmtree(static_dest)
+        shutil.copytree(static_src, static_dest)
+    else:
+        static_dir = "static"
+
+    variables_base["static_dir"] = static_dir
 
     worker_source = j2env.get_template("worker.js.jinja2").render(**variables_base)
     worker_hash = hashlib.sha256(worker_source.encode("utf-8")).hexdigest()[:12]
