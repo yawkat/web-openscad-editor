@@ -49,11 +49,7 @@ function initProfilesUi() {
     let state = loadProfilesState(config.scadInputPath);
 
     function sortedProfileIds(profiles) {
-        return Object.keys(profiles).sort((a, b) => {
-            const an = profiles[a]?.name ?? "";
-            const bn = profiles[b]?.name ?? "";
-            return an.localeCompare(bn);
-        });
+        return Object.keys(profiles).sort((a, b) => a.localeCompare(b));
     }
 
     function createIconButton(icon, title, btnClass = "btn-outline-secondary") {
@@ -77,28 +73,14 @@ function initProfilesUi() {
     }
 
     function nextProfileName(profiles) {
-        let i = 1;
-        while (hasDuplicateName(profiles, `Profile #${i}`)) {
-            i += 1;
-        }
-        return `Profile #${i}`;
-    }
-
-    function normalizedName(name) {
-        return name.trim().toLocaleLowerCase();
-    }
-
-    function hasDuplicateName(profiles, candidate, exceptId = null) {
-        const needle = normalizedName(candidate);
-        for (const [id, profile] of Object.entries(profiles)) {
-            if (id === exceptId) {
-                continue;
-            }
-            if (normalizedName(profile?.name ?? "") === needle) {
-                return true;
+        let max = 0;
+        for (const profile of Object.values(profiles)) {
+            const m = /^Profile #(\d+)$/.exec(profile?.name ?? "");
+            if (m) {
+                max = Math.max(max, Number(m[1]));
             }
         }
-        return false;
+        return `Profile #${max + 1}`;
     }
 
     function reloadStateAndRender() {
@@ -156,9 +138,9 @@ function initProfilesUi() {
         const editLink = document.createElement("button");
         editLink.type = "button";
         editLink.className = "btn btn-link btn-sm p-0";
-        editLink.textContent = "Edit";
-        editLink.title = "Edit name";
-        editLink.ariaLabel = "Edit name";
+        editLink.textContent = "✏️";
+        editLink.title = "Rename";
+        editLink.ariaLabel = "Rename";
         title.appendChild(nameText);
         title.appendChild(editLink);
         top.appendChild(title);
@@ -178,9 +160,6 @@ function initProfilesUi() {
             const state2 = loadProfilesState(config.scadInputPath);
             const existing = state2.profiles[id];
             if (!existing) {
-                return;
-            }
-            if (hasDuplicateName(state2.profiles, name, id)) {
                 return;
             }
             existing.name = name.slice(0, 120);
@@ -244,6 +223,7 @@ function initProfilesUi() {
         actions.appendChild(deleteBtn);
         top.appendChild(actions);
         row.appendChild(top);
+        row.appendChild(defaultWrap);
 
         const details = document.createElement("details");
         details.className = "mt-2";
@@ -281,7 +261,6 @@ function initProfilesUi() {
         }
 
         row.appendChild(details);
-        row.appendChild(defaultWrap);
         return row;
     }
 
