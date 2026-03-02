@@ -113,17 +113,6 @@ function initProfilesUi() {
         reloadStateAndRender();
     }
 
-    function diffFromDefault(customization) {
-        const sanitized = sanitizeCustomization(customization, config.defaultCustomization);
-        const result = {};
-        for (const [k, v] of Object.entries(sanitized)) {
-            if (JSON.stringify(v) !== JSON.stringify(config.defaultCustomization[k])) {
-                result[k] = v;
-            }
-        }
-        return result;
-    }
-
     function createProfileRow(id, profile, openDetails) {
         const row = document.createElement("div");
         row.className = "list-group-item";
@@ -289,7 +278,7 @@ function initProfilesUi() {
             const state2 = loadProfilesState(config.scadInputPath);
             state2.profiles[id] = {
                 name: nextProfileName(state2.profiles),
-                customization: diffFromDefault(customization.getCurrentCustomization()),
+                customization: customization.getChangedCustomization(),
                 applyByDefault: false,
             };
             saveProfilesState(state2, config.scadInputPath);

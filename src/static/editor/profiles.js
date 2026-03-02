@@ -32,17 +32,6 @@ export function loadProfilesState(scopeKey = "") {
             };
         }
 
-        const legacyDefaultIds = new Set(
-            (Array.isArray(parsed.defaultProfileIds) ? parsed.defaultProfileIds : [])
-                .filter((id) => typeof id === "string" && id in profiles),
-        );
-        if (typeof parsed.defaultProfileId === "string" && parsed.defaultProfileId in profiles) {
-            legacyDefaultIds.add(parsed.defaultProfileId);
-        }
-        for (const id of legacyDefaultIds) {
-            profiles[id].applyByDefault = true;
-        }
-
         return { profiles };
     } catch (e) {
         console.warn("Failed to load profiles from localStorage", e);

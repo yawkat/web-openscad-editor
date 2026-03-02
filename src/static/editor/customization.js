@@ -282,6 +282,10 @@ export function createCustomizationController({ defaultCustomization, additional
         return currentCustomization;
     }
 
+    function getChangedCustomization() {
+        return computeChangedCustomization();
+    }
+
     function getAdditionalParamNames() {
         return additionalParamNames;
     }
@@ -292,6 +296,7 @@ export function createCustomizationController({ defaultCustomization, additional
         setValue,
         attachInputListeners,
         getCurrentCustomization,
+        getChangedCustomization,
         getAdditionalParamNames,
     };
 }
