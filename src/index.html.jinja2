@@ -357,23 +357,16 @@
 </div>
 
 <div class="modal fade" id="profiles-modal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
                 <h1 class="modal-title fs-5">Profiles</h1>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <label for="profile-select" class="form-label">Saved profiles</label>
-                <select id="profile-select" class="form-select"></select>
-                <label for="profile-name" class="form-label mt-3">New profile name</label>
-                <input id="profile-name" type="text" class="form-control" autocomplete="off">
+                <div id="profiles-list" class="list-group"></div>
             </div>
             <div class="modal-footer">
-                <button id="profile-new" type="button" class="btn btn-secondary">New</button>
-                <button id="profile-save" type="button" class="btn btn-secondary">Save</button>
-                <button id="profile-delete" type="button" class="btn btn-secondary">Delete</button>
-                <button id="profile-set-default" type="button" class="btn btn-secondary">Default</button>
                 <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>

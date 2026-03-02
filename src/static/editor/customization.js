@@ -217,8 +217,10 @@ export function createCustomizationController({ defaultCustomization, additional
         }
     }
 
-    function applyCustomization(customization) {
-        resetCurrentCustomizationToDefault();
+    function applyCustomization(customization, { reset = true } = {}) {
+        if (reset) {
+            resetCurrentCustomizationToDefault();
+        }
         if (customization && typeof customization === "object" && !Array.isArray(customization)) {
             for (const [k, v] of Object.entries(customization)) {
                 if (k in defaultCustomization) {

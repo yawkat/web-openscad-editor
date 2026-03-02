@@ -15,7 +15,6 @@ import {
     saveProfilesState,
     sanitizeCustomization,
     createProfileId,
-    renderProfilesSelect,
 } from "./profiles.js";
 
 const config = getModelConfig();
@@ -43,76 +42,103 @@ function isBareEditorLoad() {
 }
 
 function initProfilesUi() {
-    const select = dom.profileSelect;
-    if (!select) {
+    const list = dom.profilesList;
+    if (!list) {
         return;
     }
     let state = loadProfilesState();
-    renderProfilesSelect(select, state);
 
-    function getSelectedId() {
-        return select.value || "";
-    }
-
-    function getSelectedProfile() {
-        const id = getSelectedId();
-        return id && state.profiles[id] ? state.profiles[id] : null;
-    }
-
-    function syncButtons() {
-        const hasSelection = !!getSelectedProfile();
-        if (dom.profileSaveButton) dom.profileSaveButton.disabled = !hasSelection;
-        if (dom.profileDeleteButton) dom.profileDeleteButton.disabled = !hasSelection;
-        if (dom.profileSetDefaultButton) dom.profileSetDefaultButton.disabled = !hasSelection;
-    }
-
-    function rerender() {
-        state = loadProfilesState();
-        renderProfilesSelect(select, state);
-        syncButtons();
-    }
-
-    if (isBareEditorLoad() && state.defaultProfileId && state.profiles[state.defaultProfileId]) {
-        const prof = state.profiles[state.defaultProfileId];
-        const sanitized = sanitizeCustomization(prof.customization, config.defaultCustomization);
-        customization.applyCustomization(sanitized);
-    }
-
-    select.addEventListener("change", () => {
-        const prof = getSelectedProfile();
-        if (prof) {
-            const sanitized = sanitizeCustomization(prof.customization, config.defaultCustomization);
-            customization.applyCustomization(sanitized);
-        }
-        syncButtons();
-    });
-
-    if (dom.profileNewButton) {
-        dom.profileNewButton.addEventListener("click", () => {
-            const name = (dom.profileNameInput?.value ?? "").trim();
-            if (!name) {
-                return;
-            }
-            const id = createProfileId();
-            const state2 = loadProfilesState();
-            state2.profiles[id] = {
-                name: name.slice(0, 120),
-                customization: sanitizeCustomization(customization.getCurrentCustomization(), config.defaultCustomization),
-            };
-            saveProfilesState(state2);
-            rerender();
-            select.value = id;
-            if (dom.profileNameInput) {
-                dom.profileNameInput.value = "";
-            }
-            syncButtons();
+    function sortedProfileIds(profiles) {
+        return Object.keys(profiles).sort((a, b) => {
+            const an = profiles[a]?.name ?? "";
+            const bn = profiles[b]?.name ?? "";
+            return an.localeCompare(bn);
         });
     }
 
-    if (dom.profileSaveButton) {
-        dom.profileSaveButton.addEventListener("click", () => {
-            const id = getSelectedId();
-            if (!id || !state.profiles[id]) {
+    function createIconButton(icon, title, btnClass = "btn-outline-secondary") {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `btn btn-sm ${btnClass}`;
+        btn.title = title;
+        btn.ariaLabel = title;
+        btn.textContent = icon;
+        return btn;
+    }
+
+    function nextProfileName(profiles) {
+        let i = 1;
+        while (hasDuplicateName(profiles, `Profile #${i}`)) {
+            i += 1;
+        }
+        return `Profile #${i}`;
+    }
+
+    function normalizedName(name) {
+        return name.trim().toLocaleLowerCase();
+    }
+
+    function hasDuplicateName(profiles, candidate, exceptId = null) {
+        const needle = normalizedName(candidate);
+        for (const [id, profile] of Object.entries(profiles)) {
+            if (id === exceptId) {
+                continue;
+            }
+            if (normalizedName(profile?.name ?? "") === needle) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function reloadStateAndRender() {
+        state = loadProfilesState();
+        renderList();
+    }
+
+    function applyProfile(id, reset) {
+        const profile = state.profiles[id];
+        if (!profile) {
+            return;
+        }
+        const sanitized = sanitizeCustomization(profile.customization, config.defaultCustomization);
+        customization.applyCustomization(sanitized, { reset });
+    }
+
+    function deleteProfileOption(id, optionName) {
+        const state2 = loadProfilesState();
+        const profile = state2.profiles[id];
+        if (!profile || !profile.customization || !(optionName in profile.customization)) {
+            return;
+        }
+        delete profile.customization[optionName];
+        saveProfilesState(state2);
+        reloadStateAndRender();
+    }
+
+    function createProfileRow(id, profile) {
+        const row = document.createElement("div");
+        row.className = "list-group-item";
+
+        const top = document.createElement("div");
+        top.className = "d-flex align-items-center justify-content-between gap-2 flex-wrap";
+
+        const title = document.createElement("div");
+        title.className = "fw-semibold";
+        title.textContent = profile.name;
+        top.appendChild(title);
+
+        const actions = document.createElement("div");
+        actions.className = "btn-group btn-group-sm";
+
+        const editBtn = createIconButton("✏️", "Edit name");
+        editBtn.addEventListener("click", () => {
+            const nameRaw = window.prompt("Profile name:", profile.name);
+            if (nameRaw === null) {
+                return;
+            }
+            const name = nameRaw.trim();
+            if (!name) {
                 return;
             }
             const state2 = loadProfilesState();
@@ -120,42 +146,130 @@ function initProfilesUi() {
             if (!existing) {
                 return;
             }
+            if (hasDuplicateName(state2.profiles, name, id)) {
+                return;
+            }
+            existing.name = name.slice(0, 120);
+            saveProfilesState(state2);
+            reloadStateAndRender();
+        });
+
+        const storeBtn = createIconButton("💾", "Store current settings");
+        storeBtn.addEventListener("click", () => {
+            const state2 = loadProfilesState();
+            const existing = state2.profiles[id];
+            if (!existing) {
+                return;
+            }
             existing.customization = sanitizeCustomization(customization.getCurrentCustomization(), config.defaultCustomization);
             saveProfilesState(state2);
-            rerender();
+            reloadStateAndRender();
         });
-    }
 
-    if (dom.profileDeleteButton) {
-        dom.profileDeleteButton.addEventListener("click", () => {
-            const id = getSelectedId();
-            if (!id || !state.profiles[id]) {
+        const applyBtn = createIconButton("▶️", "Apply profile", "btn-outline-primary");
+        applyBtn.addEventListener("click", () => applyProfile(id, false));
+
+        const applyResetBtn = createIconButton("⟳", "Apply profile after reset", "btn-outline-primary");
+        applyResetBtn.addEventListener("click", () => applyProfile(id, true));
+
+        const deleteBtn = createIconButton("🗑️", "Delete profile", "btn-outline-danger");
+        deleteBtn.addEventListener("click", () => {
+            const state2 = loadProfilesState();
+            if (!(id in state2.profiles)) {
                 return;
             }
-            const state2 = loadProfilesState();
             delete state2.profiles[id];
             if (state2.defaultProfileId === id) {
-                state2.defaultProfileId = null;
+                const fallback = sortedProfileIds(state2.profiles)[0] ?? null;
+                state2.defaultProfileId = fallback;
             }
             saveProfilesState(state2);
-            rerender();
+            reloadStateAndRender();
         });
+
+        actions.appendChild(editBtn);
+        actions.appendChild(storeBtn);
+        actions.appendChild(applyBtn);
+        actions.appendChild(applyResetBtn);
+        actions.appendChild(deleteBtn);
+        top.appendChild(actions);
+        row.appendChild(top);
+
+        const details = document.createElement("details");
+        details.className = "mt-2";
+        const summary = document.createElement("summary");
+        const options = Object.entries(profile.customization ?? {}).sort((a, b) => a[0].localeCompare(b[0]));
+        summary.textContent = `Options (${options.length})`;
+        details.appendChild(summary);
+
+        if (options.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "text-muted small mt-2";
+            empty.textContent = "No options saved in this profile.";
+            details.appendChild(empty);
+        } else {
+            const ul = document.createElement("ul");
+            ul.className = "list-group list-group-flush mt-2";
+            for (const [optionName, optionValue] of options) {
+                const li = document.createElement("li");
+                li.className = "list-group-item px-0 d-flex align-items-center justify-content-between gap-2";
+
+                const text = document.createElement("div");
+                text.className = "small";
+                text.textContent = `${optionName}: ${JSON.stringify(optionValue)}`;
+
+                const deleteOptionBtn = createIconButton("🗑️", `Delete option ${optionName}`, "btn-outline-danger");
+                deleteOptionBtn.addEventListener("click", () => deleteProfileOption(id, optionName));
+
+                li.appendChild(text);
+                li.appendChild(deleteOptionBtn);
+                ul.appendChild(li);
+            }
+            details.appendChild(ul);
+        }
+
+        row.appendChild(details);
+        return row;
     }
 
-    if (dom.profileSetDefaultButton) {
-        dom.profileSetDefaultButton.addEventListener("click", () => {
-            const id = getSelectedId();
-            if (!id || !state.profiles[id]) {
-                return;
+    function renderList() {
+        list.textContent = "";
+
+        for (const id of sortedProfileIds(state.profiles)) {
+            const profile = state.profiles[id];
+            if (!profile) {
+                continue;
             }
+            list.appendChild(createProfileRow(id, profile));
+        }
+
+        const addRow = document.createElement("button");
+        addRow.type = "button";
+        addRow.className = "list-group-item list-group-item-action d-flex align-items-center gap-2";
+        const plus = document.createElement("span");
+        plus.textContent = "➕";
+        const text = document.createElement("span");
+        text.textContent = "Create profile from current settings";
+        addRow.appendChild(plus);
+        addRow.appendChild(text);
+        addRow.addEventListener("click", () => {
+            const id = createProfileId();
             const state2 = loadProfilesState();
-            state2.defaultProfileId = id;
+            state2.profiles[id] = {
+                name: nextProfileName(state2.profiles),
+                customization: sanitizeCustomization(customization.getCurrentCustomization(), config.defaultCustomization),
+            };
             saveProfilesState(state2);
-            rerender();
+            reloadStateAndRender();
         });
+        list.appendChild(addRow);
     }
 
-    syncButtons();
+    if (isBareEditorLoad() && state.defaultProfileId && state.profiles[state.defaultProfileId]) {
+        applyProfile(state.defaultProfileId, true);
+    }
+
+    renderList();
 }
 
 renderer = createRenderer({
