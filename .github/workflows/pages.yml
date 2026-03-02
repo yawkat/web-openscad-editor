@@ -36,9 +36,9 @@ jobs:
         uses: 8BitJonny/gh-get-current-pr@4.0.0
         id: pr
       - name: Comment on PR
-        if: steps.pr.outputs.pr_found == 'true'
+        if: github.event_name == 'pull_request' && steps.pr.outputs.pr_found == 'true' && steps.cf_publish.outcome == 'success'
         uses: thollander/actions-comment-pull-request@v3
         with:
           comment-tag: deployment
-          message: ":rocket: Preview deployed to ${{ steps.cf_publish_pr.outputs.deployment-url }}"
+          message: ":rocket: Preview deployed to ${{ steps.cf_publish.outputs['pages-deployment-alias-url'] || steps.cf_publish.outputs['deployment-url'] }}"
           pr-number: "${{steps.pr.outputs.number}}"
