@@ -138,27 +138,24 @@ async function stlBytesToGlb(stlBytes) {
                 const topColor = new THREE.Color(0x63696f)
                 const bottomColor = new THREE.Color(0xc4d0dd)
 
-                const colors = new Float32Array(pos.count * 3)
-                // geometry is non-indexed, so each triangle is 3 consecutive vertices.
-                for (let i = 0; i < pos.count; i += 3) {
-                    const z0 = pos.getZ(i)
-                    const z1 = pos.getZ(i + 1)
-                    const z2 = pos.getZ(i + 2)
-                    const z = Math.min(z0, z1, z2)
-                    const t = (z - minZ) / range
+                 const colors = new Float32Array(pos.count * 3)
+                 // geometry is non-indexed, so each triangle is 3 consecutive vertices.
+                 // Compute the tint per-vertex based on its Z position to keep the gradient
+                 // continuous across faces (important for large vertical walls).
+                 for (let i = 0; i < pos.count; i++) {
+                     const z = pos.getZ(i)
+                     const t = (z - minZ) / range
+                     const c = bottomColor.clone().lerp(topColor, t)
 
-                    const c = bottomColor.clone().lerp(topColor, t)
-                    for (let j = 0; j < 3; j++) {
-                        const k = (i + j) * 3
-                        colors[k] = c.r
-                        colors[k + 1] = c.g
-                        colors[k + 2] = c.b
-                    }
-                }
-                geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
-            }
-        }
-    }
+                     const k = i * 3
+                     colors[k] = c.r
+                     colors[k + 1] = c.g
+                     colors[k + 2] = c.b
+                 }
+                 geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
+             }
+         }
+     }
 
     const material = new THREE.MeshStandardMaterial({
         color: 0xc4d0dd,
