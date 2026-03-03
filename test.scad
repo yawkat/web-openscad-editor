@@ -26,6 +26,14 @@ text_depth = 1.2; // [0.2:0.1:5]
 text_z_offset = 0.2; // [-2:0.1:4]
 text_anchor = "center"; // [center, left, right]
 
+/* [Shading demo] */
+
+show_shading_demo = true;
+demo_height = 48; // [10:1:120]
+demo_wall_width = 14; // [4:1:50]
+demo_wall_depth = 10; // [4:1:40]
+demo_pocket_diameter = 8; // [2:0.5:24]
+
 /* [Hidden] */
 
 $fn = 72;
@@ -82,6 +90,35 @@ module label_3d(str, font, size, depth, anchor) {
     );
 }
 
+module shading_demo_structures(model_w, model_d, h, wall_w, wall_d, pocket_d) {
+  // Two tall walls placed beside the model:
+  // - left wall stays plain
+  // - right wall has pockets/slots
+  // This makes vertical-gradient continuity artifacts easy to see.
+  spacing_x = model_w / 2 + wall_w * 1.6;
+  spacing_y = model_d / 2 + wall_d * 0.9;
+
+  // plain wall
+  translate([-spacing_x, spacing_y, h / 2])
+    cube([wall_w, wall_d, h], center = true);
+
+  // pocketed wall
+  difference() {
+    translate([spacing_x, spacing_y, h / 2])
+      cube([wall_w, wall_d, h], center = true);
+
+    // cylindrical pockets stacked along Z
+    for (z = [h * 0.18 : h * 0.2 : h * 0.82])
+      translate([spacing_x, spacing_y, z])
+        rotate([90, 0, 0])
+          cylinder(d = pocket_d, h = wall_d + 0.4, center = true);
+
+    // one long vertical slot
+    translate([spacing_x, spacing_y, h * 0.53])
+      cube([wall_w * 0.45, wall_d + 0.4, h * 0.62], center = true);
+  }
+}
+
 model_h = height;
 
 difference() {
@@ -102,6 +139,16 @@ difference() {
       translate([0, 0, model_h + text_z_offset])
         label_3d(text_string, text_font, text_size, text_depth, text_anchor);
     }
+
+    if (show_shading_demo)
+      shading_demo_structures(
+        width,
+        depth,
+        demo_height,
+        demo_wall_width,
+        demo_wall_depth,
+        demo_pocket_diameter
+      );
   }
 
   bolt_holes(hole_count, hole_diameter, min(width, depth) * 0.35, model_h)
