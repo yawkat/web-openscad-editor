@@ -97,7 +97,6 @@ function uint8ArrayToArrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
 }
 
-const INPUT_MOUNT = "/input"
 let cachedInputFiles = null
 let preloadAllInputsPromise = null
 
@@ -142,7 +141,7 @@ async function preloadAllInputFiles() {
 }
 
 function loadInputFileIntoInstance(instance, virtualPath, bytes) {
-    const fullPath = INPUT_MOUNT + virtualPath
+    const fullPath = virtualPath
     const parent = fullPath.substring(0, fullPath.lastIndexOf("/"))
     if (parent) {
         instance.FS.mkdirTree(parent)
@@ -278,14 +277,6 @@ async function createInstance() {
         printErr: logInfo,
     })
 
-    // Create a stable mount point for input files.
-    // Input bytes are fetched once and copied into each fresh instance.
-    try {
-        instance.FS.mkdir(INPUT_MOUNT)
-    } catch (e) {
-        // ignore
-    }
-
     // OpenSCAD uses fontconfig for text() rendering.
     // In WASM there is no system fontconfig, so we ship a small config + fonts.
     // The Emscripten runtime exposes process environment via instance.ENV.
@@ -332,7 +323,7 @@ async function renderOnce({ input, normalParams, additionalParams }) {
         // ignore
     }
     const args = [
-        INPUT_MOUNT + input,
+        input,
         "-o",
         output,
         {% for feat in config.openscad.enable_features %}"--enable={{ feat }}",
