@@ -95,8 +95,18 @@ export function createRenderer({
         if (rendering) {
             lastResult = null;
             dom.renderState.classList.remove("d-none");
+            dom.modelViewer.classList.add("is-outdated");
+            dom.modelViewer.setAttribute("aria-busy", "true");
+            if (dom.modelLoadingOverlay) {
+                dom.modelLoadingOverlay.classList.remove("d-none");
+            }
         } else {
             dom.renderState.classList.add("d-none");
+            dom.modelViewer.classList.remove("is-outdated");
+            dom.modelViewer.setAttribute("aria-busy", "false");
+            if (dom.modelLoadingOverlay) {
+                dom.modelLoadingOverlay.classList.add("d-none");
+            }
             if (isDirty) {
                 isDirty = false;
                 startRender();

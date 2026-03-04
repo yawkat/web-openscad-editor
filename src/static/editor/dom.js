@@ -17,5 +17,6 @@ export function getDomRefs() {
         renderErrorLog: document.getElementById("render-error-log"),
         renderErrorCopy: document.getElementById("render-error-copy"),
         modelViewer: document.getElementById("model"),
+        modelLoadingOverlay: document.getElementById("model-loading-overlay"),
     };
 }

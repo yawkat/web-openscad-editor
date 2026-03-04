@@ -43,6 +43,24 @@
             height: 100%;
             width: 100%;
         }
+
+        #pane-left {
+            position: relative;
+        }
+
+        #model.is-outdated {
+            opacity: 0.55;
+        }
+
+        #model-loading-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 10;
+        }
         @media only screen and (max-width: 992px) {
             body {
                 display: block;
@@ -183,6 +201,9 @@
     <!-- the environment image disables the default lighting -->
     <model-viewer id="model" camera-controls interaction-prompt="none" orientation="0deg -90deg 0deg"
                   environment-image="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAIABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJVAA//Z"></model-viewer>
+    <div id="model-loading-overlay" class="d-none" aria-hidden="true">
+        <span class="spinner-border" aria-hidden="true"></span>
+    </div>
     <div id="controls">
         <button id="render" type="button" class="btn btn-secondary">Render<span id="render-state" class="d-none">ing… <span
                 class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></button>
