@@ -5,7 +5,6 @@ import typing
 import re
 import subprocess
 import json
-import base64
 import jinja2
 import shutil
 import hashlib
@@ -144,8 +143,21 @@ def main():
         undefined=jinja2.StrictUndefined,
     )
     j2env.filters["json_dump"] = json.dumps
+    cas_dir = "cas"
+    cas_fs: typing.Dict[str, str] = {}
+    cas_out = os.path.join(args.output, cas_dir)
+    os.makedirs(cas_out, exist_ok=True)
+    for virtual_path, content in fs.items():
+        digest = hashlib.sha256(content).hexdigest()
+        cas_fs[virtual_path] = digest
+        cas_file = os.path.join(cas_out, digest)
+        if not os.path.exists(cas_file):
+            with open(cas_file, "wb") as f:
+                f.write(content)
+
     variables_base: typing.Dict[str, typing.Any] = {
-        "fs": {k: base64.b64encode(v).decode("ascii") for k, v in fs.items()},
+        "fs_manifest": cas_fs,
+        "fs_cas_dir": cas_dir,
         "config": config,
         "contexts": contexts,
     }

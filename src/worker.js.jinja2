@@ -93,17 +93,79 @@ let runQueue = Promise.resolve()
 // OpenSCAD's WASM build aborts its runtime after a render.
 // Create a fresh instance for each render.
 
-function base64ToUint8Array(base64) {
-    const binary = atob(base64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i)
-    }
-    return bytes
-}
-
 function uint8ArrayToArrayBuffer(bytes) {
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+}
+
+const INPUT_MOUNT = "/input"
+let cachedInputFiles = null
+let preloadAllInputsPromise = null
+
+function getCachedInputFiles() {
+    if (cachedInputFiles !== null) {
+        return cachedInputFiles
+    }
+    cachedInputFiles = new Map()
+    {% for virtual_path, digest in fs_manifest.items() %}
+    cachedInputFiles.set({{ virtual_path | json_dump }}, {
+        digest: {{ digest | json_dump }},
+        url: `./{{ fs_cas_dir }}/{{ digest }}`,
+    })
+    {% endfor %}
+    return cachedInputFiles
+}
+
+async function fetchBytes(url) {
+    const r = await fetch(url)
+    if (!r.ok) {
+        throw new Error(`Failed to fetch ${url}: ${r.status} ${r.statusText}`)
+    }
+    return new Uint8Array(await r.arrayBuffer())
+}
+
+async function preloadAllInputFiles() {
+    if (preloadAllInputsPromise) {
+        await preloadAllInputsPromise
+        return
+    }
+
+    const files = getCachedInputFiles()
+    preloadAllInputsPromise = Promise.all(
+        Array.from(files.values()).map(async (entry) => {
+            if (!entry.bytes) {
+                entry.bytes = await fetchBytes(entry.url)
+            }
+        }),
+    ).then(() => undefined)
+
+    await preloadAllInputsPromise
+}
+
+function loadInputFileIntoInstance(instance, virtualPath, bytes) {
+    const fullPath = INPUT_MOUNT + virtualPath
+    const parent = fullPath.substring(0, fullPath.lastIndexOf("/"))
+    if (parent) {
+        instance.FS.mkdirTree(parent)
+    }
+    instance.FS.writeFile(fullPath, bytes)
+    try {
+        // Make input read-only inside the FS
+        instance.FS.chmod(fullPath, 0o444)
+    } catch (e) {
+        // ignore
+    }
+}
+
+async function populateInstanceInputFiles(instance) {
+    await preloadAllInputFiles()
+
+    const files = getCachedInputFiles()
+    for (const [virtualPath, entry] of files.entries()) {
+        if (!entry.bytes) {
+            throw new Error(`Input not loaded: ${virtualPath}`)
+        }
+        loadInputFileIntoInstance(instance, virtualPath, entry.bytes)
+    }
 }
 
 async function stlBytesToGlb(stlBytes) {
@@ -216,6 +278,14 @@ async function createInstance() {
         printErr: logInfo,
     })
 
+    // Create a stable mount point for input files.
+    // Input bytes are fetched once and copied into each fresh instance.
+    try {
+        instance.FS.mkdir(INPUT_MOUNT)
+    } catch (e) {
+        // ignore
+    }
+
     // OpenSCAD uses fontconfig for text() rendering.
     // In WASM there is no system fontconfig, so we ship a small config + fonts.
     // The Emscripten runtime exposes process environment via instance.ENV.
@@ -226,22 +296,18 @@ async function createInstance() {
         instance.ENV.HOME = "/tmp"
     }
     instance.FS.mkdirTree("/tmp/fontconfig")
-    {% for k, v in fs.items() %}
-    {
-        const data = base64ToUint8Array("{{ v }}")
-        logInfo("Loading {{ k }} (" + data.length + " bytes)")
-        const parent = "{{ k }}".substring(0, "{{ k }}".lastIndexOf("/"))
-        if (parent) {
-            instance.FS.mkdirTree(parent)
-        }
-        instance.FS.writeFile("{{ k }}", data)
-    }
-    {% endfor %}
     return instance
 }
 
 async function renderOnce({ input, normalParams, additionalParams }) {
     const instance = await createInstance()
+
+    // Eagerly fetch all inputs once (parallel), then materialize them in each
+    // fresh OpenSCAD instance.
+    if (!getCachedInputFiles().has(input)) {
+        throw new Error(`Unknown input file: ${input}`)
+    }
+    await populateInstanceInputFiles(instance)
 
     const stringifiedParameters = {}
     for (const [k, v] of Object.entries(normalParams)) {
@@ -266,7 +332,7 @@ async function renderOnce({ input, normalParams, additionalParams }) {
         // ignore
     }
     const args = [
-        input,
+        INPUT_MOUNT + input,
         "-o",
         output,
         {% for feat in config.openscad.enable_features %}"--enable={{ feat }}",
