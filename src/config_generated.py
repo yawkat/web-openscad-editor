@@ -55,6 +55,11 @@ class Openscad(BaseModel):
     )
 
 
+class ExportFileStem(BaseModel):
+    js: str | None = Field(None, description='JavaScript expression')
+    fixed: str | None = Field(None, description='Fixed value')
+
+
 class Presets(BaseModel):
     text: str | None = Field(
         'Presets', description='Text to display in the presets dropdown'
@@ -125,6 +130,11 @@ class ModelConfig(BaseModel):
     )
     description_extra_html: str | None = Field(
         None, alias='description-extra-html', description='Per-file HTML description'
+    )
+    export_file_stem: ExportFileStem | None = Field(
+        None,
+        alias='export-file-stem',
+        description='Filename stem (without extension) for exported files',
     )
     param_metadata: dict[str, ParamMetadata] | None = Field(
         {},

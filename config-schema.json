@@ -134,6 +134,22 @@
           "type": "string",
           "description": "Per-file HTML description"
         },
+        "export-file-stem": {
+          "type": ["object", "null"],
+          "description": "Filename stem (without extension) for exported files",
+          "default": null,
+          "properties": {
+            "js": {
+              "type": "string",
+              "description": "JavaScript expression"
+            },
+            "fixed": {
+              "type": ["string", "null"],
+              "description": "Fixed value",
+              "default": null
+            }
+          }
+        },
         "param-metadata": {
           "type": "object",
           "description": "Additional metadata for model parameters",

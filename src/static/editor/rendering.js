@@ -64,7 +64,7 @@ function showRenderError(dom, { summary, log }) {
  * @param {object} opts
  * @param {string}   opts.workerUrl
  * @param {string}   opts.scadInputPath
- * @param {string}   opts.exportFilenamePrefix
+ * @param {*}        opts.exportFileStem     - null or {fixed?: string, js?: string}
  * @param {*}        opts.umamiTrackRender   - null or string[]
  * @param {*}        opts.umamiTrackExport   - null or string[]
  * @param {object}   opts.dom                - from getDomRefs()
@@ -74,7 +74,7 @@ function showRenderError(dom, { summary, log }) {
 export function createRenderer({
     workerUrl,
     scadInputPath,
-    exportFilenamePrefix,
+    exportFileStem,
     umamiTrackRender,
     umamiTrackExport,
     dom,
@@ -223,7 +223,26 @@ export function createRenderer({
         if (lastResult != null) {
             const link = document.createElement("a");
             link.href = URL.createObjectURL(new Blob([lastResult.stl], { type: "application/octet-stream" }));
-            link.download = exportFilenamePrefix + ".stl";
+            const customization = getCustomization();
+            let stem = "";
+            if (exportFileStem !== null) {
+                if (exportFileStem.js != null) {
+                    try {
+                        const expression = String(exportFileStem.js);
+                        const evaluator = new Function(...Object.keys(customization), "return " + expression);
+                        const evaluated = evaluator(...Object.values(customization));
+                        stem = evaluated == null ? "" : String(evaluated);
+                    } catch (e) {
+                        console.warn("Failed to evaluate export-file-stem expression", e);
+                        if (exportFileStem.fixed != null) {
+                            stem = String(exportFileStem.fixed);
+                        }
+                    }
+                } else if (exportFileStem.fixed != null) {
+                    stem = String(exportFileStem.fixed);
+                }
+            }
+            link.download = stem + ".stl";
             document.body.appendChild(link);
             link.click();
             link.remove();

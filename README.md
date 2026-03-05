@@ -66,7 +66,7 @@ Project metadata is defined in the `[project]` table. All settings are optional.
 [project]
 name = "MyProject"
 uri = "https://github.com/user/project"
-# Optional: This is used as the name of generated STL files
+# Optional: This is used as the name of generated STL files (deprecated; use model export-file-stem)
 export-filename-prefix = "my-project"
 # Optional: This is injected at the end of the <head> tag of all generated pages
 head-extra = "<script>alert('Hello world!')</script>"
@@ -121,6 +121,12 @@ Also in the `[[model]]` table, you can define various configuration options for 
 file = "my-model.scad"
 # Extra HTML to show in the description section of the model page
 description-extra-html = "<p>This is a description of my model.</p>"
+
+# Optional: Configure the exported STL filename stem (without extension)
+# Use a fixed name:
+export-file-stem = {fixed = "my-model"}
+# Or derive it from model parameters (same JS scope as display-condition):
+export-file-stem = {js = "magnets ? 'bin-with-magnets' : 'bin'"}
 ```
 
 #### Additional Parameters

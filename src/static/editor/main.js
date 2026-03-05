@@ -305,7 +305,7 @@ function initProfilesUi() {
 renderer = createRenderer({
     workerUrl: config.workerUrl,
     scadInputPath: config.scadInputPath,
-    exportFilenamePrefix: config.exportFilenamePrefix,
+    exportFileStem: config.exportFileStem,
     umamiTrackRender: config.umamiTrackRender,
     umamiTrackExport: config.umamiTrackExport,
     dom,
