@@ -62,6 +62,27 @@
           "description": "List of OpenSCAD experimental features to enable, passed as --enable=<feature> arguments.",
           "items": { "type": "string" },
           "default": []
+        },
+        "libraries": {
+          "type": "object",
+          "description": "Bundled OpenSCAD libraries to make available to models.",
+          "properties": {
+            "bosl2": {
+              "type": "object",
+              "description": "BOSL2 library configuration.",
+              "required": ["commit"],
+              "properties": {
+                "commit": {
+                  "type": "string",
+                  "description": "Git commit to download for BOSL2.",
+                  "pattern": "^[0-9a-fA-F]{7,40}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
         }
       }
     },

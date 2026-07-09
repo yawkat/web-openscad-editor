@@ -1,6 +1,9 @@
 [project]
 head-extra = '<script defer src="https://um.yawk.at/script.js" data-website-id="b5d4c506-bc83-46c4-a1d0-84defbe9736d"></script>'
 
+[openscad.libraries.bosl2]
+commit = "fbcdfdd511b6abfde93c43c8f85c2bd24ee7a02d"
+
 [[model]]
 file = "test.scad"
 export-file-stem = {js = "shape + '-' + width + 'x' + depth + 'x' + height"}

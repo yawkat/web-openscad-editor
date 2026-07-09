@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field
 
 
 class Project(BaseModel):
@@ -25,6 +25,24 @@ class FontSource(Enum):
     auto = 'auto'
     appimage = 'appimage'
     system = 'system'
+
+
+class Bosl2(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    commit: str = Field(
+        ...,
+        description='Git commit to download for BOSL2.',
+        pattern='^[0-9a-fA-F]{7,40}$',
+    )
+
+
+class Libraries(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    bosl2: Bosl2 | None = Field(None, description='BOSL2 library configuration.')
 
 
 class Openscad(BaseModel):
@@ -52,6 +70,10 @@ class Openscad(BaseModel):
         [],
         alias='enable-features',
         description='List of OpenSCAD experimental features to enable, passed as --enable=<feature> arguments.',
+    )
+    libraries: Libraries | None = Field(
+        default_factory=lambda: Libraries.model_validate({}),
+        description='Bundled OpenSCAD libraries to make available to models.',
     )
 
 

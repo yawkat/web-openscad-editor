@@ -92,6 +92,12 @@ sha256-wasm-web = "..."
 font-source = "auto"
 # Experimental OpenSCAD features to enable (passed as --enable=<feature>)
 enable-features = ["roof"]
+
+# Bundled OpenSCAD libraries to make available to models. This lets model files
+# use `use <BOSL2/std.scad>` without vendoring BOSL2. A commit is required so
+# exports are reproducible.
+[openscad.libraries.bosl2]
+commit = "0123456789abcdef0123456789abcdef01234567"
 ```
 
 ### Model Files

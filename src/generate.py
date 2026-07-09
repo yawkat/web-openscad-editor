@@ -13,10 +13,18 @@ import tomllib
 import model
 import config_generated
 
+BOSL2_REPO_ARCHIVE_URL = "https://github.com/BelfrySCAD/BOSL2/archive"
+SUPPORTED_SCAD_LIBRARIES = {
+    "bosl2": {
+        "virtual_root": "BOSL2",
+        "archive_url": BOSL2_REPO_ARCHIVE_URL,
+    },
+}
 
-def run_openscad(*params: str):
+
+def run_openscad(*params: str, env: typing.Mapping[str, str] | None = None):
     print("Running OpenSCAD:", *params)
-    subprocess.run(["build/openscad.AppImage"] + list(params), check=True)
+    subprocess.run(["build/openscad.AppImage"] + list(params), check=True, env=env)
 
 
 def download(file: str, uri: str, sha256: typing.Optional[str] = None):
@@ -88,6 +96,16 @@ def main():
     )
     os.chmod("build/openscad.AppImage", 0o755)
 
+    library_roots, library_include_paths = ensure_scad_libraries(
+        config.openscad.libraries
+    )
+    openscad_env = os.environ.copy()
+    if library_include_paths:
+        existing_path = openscad_env.get("OPENSCADPATH")
+        openscad_env["OPENSCADPATH"] = os.pathsep.join(
+            library_include_paths + ([existing_path] if existing_path else [])
+        )
+
     class ParamsLoaderImpl(model.ParamsLoader):
         def load_json(self, declared_path: str) -> model.ParamSet:
             with open(declared_path, "r", encoding="utf-8") as f:
@@ -102,7 +120,12 @@ def main():
                     for feat in (config.openscad.enable_features or [])
                 ]
                 run_openscad(
-                    "-o", f.name, "--export-format=param", *enable_args, declared_path
+                    "-o",
+                    f.name,
+                    "--export-format=param",
+                    *enable_args,
+                    declared_path,
+                    env=openscad_env,
                 )
                 return json.load(f)["parameters"]
 
@@ -120,7 +143,7 @@ def main():
 
     fs: typing.Dict[str, bytes] = {}
     for context in contexts:
-        load_scad_recursively(context.config.file, scad_root, fs)
+        load_scad_recursively(context.config.file, scad_root, fs, library_roots)
         context.relative = host_path_to_virtual(scad_root, context.config.file)
         if args.clean_urls:
             context.link = context.link.removesuffix(".html")
@@ -233,6 +256,60 @@ def main():
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
 
 
+def scad_library_cache_dir() -> str:
+    return os.path.join("build", "libraries")
+
+
+def ensure_scad_libraries(
+    libraries: config_generated.Libraries | None,
+) -> tuple[typing.Dict[str, str], list[str]]:
+    roots: typing.Dict[str, str] = {}
+    include_paths: list[str] = []
+
+    if libraries is not None and libraries.bosl2 is not None:
+        name = "bosl2"
+        spec = SUPPORTED_SCAD_LIBRARIES[name]
+        virtual_root = spec["virtual_root"]
+        target = ensure_scad_library(name, libraries.bosl2.commit)
+        roots[virtual_root] = target
+        include_paths.append(os.path.dirname(target))
+
+    return roots, include_paths
+
+
+def ensure_scad_library(name: str, commit: str) -> str:
+    spec = SUPPORTED_SCAD_LIBRARIES[name]
+    cache_dir = scad_library_cache_dir()
+    cache_key = re.sub(r"[^A-Za-z0-9_.-]", "-", f"{name}-{commit}")
+    target = os.path.join(cache_dir, cache_key, spec["virtual_root"])
+    if os.path.isdir(target):
+        return target
+
+    archive = os.path.join(cache_dir, f"{cache_key}.zip")
+    download(archive, f"{spec['archive_url']}/{commit}.zip")
+
+    tmp = os.path.join(cache_dir, f".{name}.tmp")
+    if os.path.exists(tmp):
+        shutil.rmtree(tmp)
+    os.makedirs(tmp, exist_ok=True)
+    shutil.unpack_archive(archive, tmp)
+
+    unpacked_entries = [
+        os.path.join(tmp, entry)
+        for entry in os.listdir(tmp)
+        if os.path.isdir(os.path.join(tmp, entry))
+    ]
+    if len(unpacked_entries) != 1:
+        raise RuntimeError(
+            f"Downloaded {name} archive did not contain one root directory"
+        )
+    unpacked = unpacked_entries[0]
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    os.rename(unpacked, target)
+    shutil.rmtree(tmp)
+    return target
+
+
 def host_path_to_virtual(root: str, host_path: str) -> str:
     rel = os.path.relpath(host_path, root)
     rel = rel.replace(os.sep, "/")
@@ -241,8 +318,51 @@ def host_path_to_virtual(root: str, host_path: str) -> str:
     return "/" + rel.lstrip("./")
 
 
-def load_scad_recursively(host_path: str, root: str, fs: typing.Dict[str, bytes]):
-    virtual_path = host_path_to_virtual(root, host_path)
+def host_path_to_virtual_with_libraries(
+    root: str, host_path: str, library_roots: typing.Dict[str, str] | None = None
+) -> str:
+    library_roots = library_roots or {}
+    for virtual_root, library_root in library_roots.items():
+        abs_host_path = os.path.abspath(host_path)
+        abs_library_root = os.path.abspath(library_root)
+        try:
+            if (
+                os.path.commonpath([abs_host_path, abs_library_root])
+                != abs_library_root
+            ):
+                continue
+        except ValueError:
+            continue
+        rel = os.path.relpath(abs_host_path, abs_library_root).replace(os.sep, "/")
+        return "/" + virtual_root + ("" if rel == "." else "/" + rel)
+    return host_path_to_virtual(root, host_path)
+
+
+def resolve_scad_include(
+    host_path: str, include_path: str, library_roots: typing.Dict[str, str] | None = None
+) -> str:
+    relative_path = os.path.normpath(
+        os.path.join(os.path.dirname(host_path), include_path)
+    )
+    if os.path.exists(relative_path):
+        return relative_path
+
+    library_roots = library_roots or {}
+    parts = include_path.replace("\\", "/").split("/", 1)
+    if len(parts) == 2:
+        library_root = library_roots.get(parts[0])
+        if library_root is not None:
+            return os.path.normpath(os.path.join(library_root, parts[1]))
+    return relative_path
+
+
+def load_scad_recursively(
+    host_path: str,
+    root: str,
+    fs: typing.Dict[str, bytes],
+    library_roots: typing.Dict[str, str] | None = None,
+):
+    virtual_path = host_path_to_virtual_with_libraries(root, host_path, library_roots)
     if virtual_path in fs:
         return
     print(f"Including {virtual_path}")
@@ -257,11 +377,10 @@ def load_scad_recursively(host_path: str, root: str, fs: typing.Dict[str, bytes]
         include = pattern_include.match(line)
         if include:
             load_scad_recursively(
-                os.path.normpath(
-                    os.path.join(os.path.dirname(host_path), include.group(1))
-                ),
+                resolve_scad_include(host_path, include.group(1), library_roots),
                 root,
                 fs,
+                library_roots,
             )
 
 

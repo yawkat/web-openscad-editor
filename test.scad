@@ -2,6 +2,8 @@
 //
 // This file is meant to exercise the generator + OpenSCAD customizer parsing.
 
+include <BOSL2/std.scad>
+
 /* [Model] */
 
 shape = "rounded box"; // [rounded box, capsule, ring]
@@ -17,6 +19,9 @@ hole_count = 6; // [0:1:24]
 
 show_baseplate = true;
 baseplate_thickness = 2; // [0:0.5:10]
+
+show_bosl2_sample = true;
+bosl2_sample_size = 12; // [4:1:30]
 
 show_text = true;
 text_string = "web-openscad-editor";
@@ -90,6 +95,15 @@ module label_3d(str, font, size, depth, anchor) {
     );
 }
 
+module bosl2_sample(size) {
+  translate([0, -depth / 2 - size * 0.8, size / 4])
+    cuboid(
+      [size, size, size / 2],
+      rounding = size / 8,
+      edges = "Z"
+    );
+}
+
 module shading_demo_structures(model_w, model_d, h, wall_w, wall_d, pocket_d) {
   // Two tall walls placed beside the model:
   // - left wall stays plain
@@ -139,6 +153,9 @@ difference() {
       translate([0, 0, model_h + text_z_offset])
         label_3d(text_string, text_font, text_size, text_depth, text_anchor);
     }
+
+    if (show_bosl2_sample)
+      bosl2_sample(bosl2_sample_size);
 
     if (show_shading_demo)
       shading_demo_structures(
