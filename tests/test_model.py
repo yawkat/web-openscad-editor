@@ -153,3 +153,24 @@ def test_template_multi():
     assert len(models) == 1
     assert models[0].description_extra_html == "foo"
     assert models[0].additional_params == [ "fizz.json", "buzz.json"]
+
+def test_preview_style_config():
+    def style_value(model_config):
+        value = model_config.preview_style
+        return value.value if isinstance(value, config_generated.PreviewStyle) else value
+
+    default_config = config_generated.WebOpenscadEditorConfiguration.model_validate({
+        "model": [ { "file": "model.scad" } ]
+    })
+    assert style_value(default_config.model[0]) is None
+
+    colors_config = config_generated.WebOpenscadEditorConfiguration.model_validate({
+        "model": [ { "file": "model.scad", "preview-style": "colors" } ]
+    })
+    assert style_value(colors_config.model[0]) == "colors"
+
+    models = model.flatten_model_configs(config_generated.WebOpenscadEditorConfiguration.model_validate({
+        "model-template": { "default": { "preview-style": "colors" } },
+        "model": [ { "file": "model.scad" } ]
+    }))
+    assert style_value(models[0]) == "colors"

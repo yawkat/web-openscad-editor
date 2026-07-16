@@ -186,6 +186,7 @@
                 {%- endfor %}
             ],
             scadInputPath: {{ ctx.relative | json_dump }},
+            previewStyle: {{ ("shaded" if ctx.config.preview_style is none else (ctx.config.preview_style if ctx.config.preview_style is string else (ctx.config.preview_style.value or "shaded"))) | json_dump }},
             exportFileStem: {% if ctx.config.export_file_stem is not none %}{{ ctx.config.export_file_stem.model_dump(by_alias=True) | json_dump }}{% elif config.project.export_filename_prefix %}{{ {'fixed': config.project.export_filename_prefix} | json_dump }}{% else %}null{% endif %},
             umamiTrackRender: {% if ctx.config.umami_track_render is not none %}{{ ctx.config.umami_track_render | json_dump }}{% else %}null{% endif %},
             umamiTrackExport: {% if ctx.config.umami_track_export is not none %}{{ ctx.config.umami_track_export | json_dump }}{% else %}null{% endif %},

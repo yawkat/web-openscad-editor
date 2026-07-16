@@ -77,6 +77,12 @@ class Openscad(BaseModel):
     )
 
 
+class PreviewStyle(Enum):
+    shaded = 'shaded'
+    colors = 'colors'
+    NoneType_None = None
+
+
 class ExportFileStem(BaseModel):
     js: str | None = Field(None, description='JavaScript expression')
     fixed: str | None = Field(None, description='Fixed value')
@@ -152,6 +158,11 @@ class ModelConfig(BaseModel):
     )
     description_extra_html: str | None = Field(
         None, alias='description-extra-html', description='Per-file HTML description'
+    )
+    preview_style: PreviewStyle | None = Field(
+        None,
+        alias='preview-style',
+        description='Preview rendering style. The shaded style matches older gray previews; colors uses OpenSCAD face colors with neutral lighting.',
     )
     export_file_stem: ExportFileStem | None = Field(
         None,

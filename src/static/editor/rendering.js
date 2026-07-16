@@ -64,6 +64,7 @@ function showRenderError(dom, { summary, log }) {
  * @param {object} opts
  * @param {string}   opts.workerUrl
  * @param {string}   opts.scadInputPath
+ * @param {string}   opts.previewStyle
  * @param {*}        opts.exportFileStem     - null or {fixed?: string, js?: string}
  * @param {*}        opts.umamiTrackRender   - null or string[]
  * @param {*}        opts.umamiTrackExport   - null or string[]
@@ -74,6 +75,7 @@ function showRenderError(dom, { summary, log }) {
 export function createRenderer({
     workerUrl,
     scadInputPath,
+    previewStyle,
     exportFileStem,
     umamiTrackRender,
     umamiTrackExport,
@@ -186,6 +188,7 @@ export function createRenderer({
         worker.postMessage({
             type: "render",
             input: scadInputPath,
+            previewStyle: previewStyle || "shaded",
             normalParams: normalParams,
             additionalParams: additionalParams,
         });
