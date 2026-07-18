@@ -155,6 +155,12 @@
           "type": "string",
           "description": "Per-file HTML description"
         },
+        "preview-style": {
+          "type": ["string", "null"],
+          "enum": ["shaded", "colors", null],
+          "default": null,
+          "description": "Preview rendering style. The shaded style matches older gray previews; colors uses OpenSCAD face colors with neutral lighting."
+        },
         "export-file-stem": {
           "type": ["object", "null"],
           "description": "Filename stem (without extension) for exported files",

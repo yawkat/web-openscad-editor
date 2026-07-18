@@ -1,9 +1,12 @@
 import OpenSCAD from "./openscad-wasm/openscad.js"
 import * as THREE from "https://esm.sh/three@0.160.0"
-import {STLLoader} from "https://esm.sh/three@0.160.0/examples/jsm/loaders/STLLoader.js"
 import {GLTFExporter} from "https://esm.sh/three@0.160.0/examples/jsm/exporters/GLTFExporter.js"
+import {offMeshToBinaryStl, parseOffMesh} from "./{{ static_dir }}/editor/off.js"
 
 console.log("Worker started")
+
+const DEFAULT_TOP_COLOR = new THREE.Color(0x63696f)
+const DEFAULT_BOTTOM_COLOR = new THREE.Color(0xc4d0dd)
 
 const MAX_LOG_CHARS = 1024 * 1024
 let currentLog = ""
@@ -93,10 +96,6 @@ let runQueue = Promise.resolve()
 // OpenSCAD's WASM build aborts its runtime after a render.
 // Create a fresh instance for each render.
 
-function uint8ArrayToArrayBuffer(bytes) {
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-}
-
 let cachedInputFiles = null
 let preloadAllInputsPromise = null
 
@@ -167,61 +166,68 @@ async function populateInstanceInputFiles(instance) {
     }
 }
 
-async function stlBytesToGlb(stlBytes) {
-    let geometry = new STLLoader().parse(uint8ArrayToArrayBuffer(stlBytes))
+function applyDepthCueing(geometry, previewStyle) {
+    const pos = geometry.getAttribute("position")
+    if (!pos || pos.count < 3) {
+        return
+    }
+    const baseColors = geometry.getAttribute("color")
+    const useFaceColors = previewStyle === "colors"
+
+    let minZ = Infinity
+    let maxZ = -Infinity
+    for (let i = 0; i < pos.count; i++) {
+        const z = pos.getZ(i)
+        if (z < minZ) minZ = z
+        if (z > maxZ) maxZ = z
+    }
+
+    const range = maxZ - minZ
+    if (!isFinite(range) || range <= 0) {
+        return
+    }
+
+    const colors = new Float32Array(pos.count * 3)
+    for (let i = 0; i < pos.count; i++) {
+        const z = pos.getZ(i)
+        const t = (z - minZ) / range
+        const k = i * 3
+
+        if (useFaceColors && baseColors) {
+            const r = baseColors.getX(i)
+            const g = baseColors.getY(i)
+            const b = baseColors.getZ(i)
+            // Keep the OpenSCAD color hue, but vary luminance with Z so
+            // pockets and vertical surfaces remain readable. Colored
+            // models need a narrower luminance range than the default
+            // gray preview or saturated colors wash out.
+            colors[k] = (r + (1 - r) * 0.08) * (1 - t) + (r * 0.78) * t
+            colors[k + 1] = (g + (1 - g) * 0.08) * (1 - t) + (g * 0.78) * t
+            colors[k + 2] = (b + (1 - b) * 0.08) * (1 - t) + (b * 0.78) * t
+        } else {
+            const c = DEFAULT_BOTTOM_COLOR.clone().lerp(DEFAULT_TOP_COLOR, t)
+            colors[k] = c.r
+            colors[k + 1] = c.g
+            colors[k + 2] = c.b
+        }
+    }
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
+}
+
+async function geometryToGlb(geometry, previewStyle) {
     if (geometry.index) {
-        // STL is typically non-indexed, but if we ever get indexed geometry,
-        // convert to non-indexed so per-triangle vertex colors are stable.
+        // Keep vertex colors stable for per-face colored geometry.
         geometry = geometry.toNonIndexed()
     }
     if (!geometry.getAttribute("normal")) {
         geometry.computeVertexNormals()
     }
 
-    // Add simple depth cueing: tint triangles based on their Z position.
-    // This makes pockets easier to read without AO.
-    {
-        const pos = geometry.getAttribute("position")
-        if (pos && pos.count >= 3) {
-            let minZ = Infinity
-            let maxZ = -Infinity
-            for (let i = 0; i < pos.count; i++) {
-                const z = pos.getZ(i)
-                if (z < minZ) minZ = z
-                if (z > maxZ) maxZ = z
-            }
-
-            const range = maxZ - minZ
-            if (isFinite(range) && range > 0) {
-                // this logic shades faces based on Z position to make pockets easier to distinguish
-
-                // Base material color is 0x9aa3ad; these are subtle tints around it.
-                const topColor = new THREE.Color(0x63696f)
-                const bottomColor = new THREE.Color(0xc4d0dd)
-
-                 const colors = new Float32Array(pos.count * 3)
-                 // geometry is non-indexed, so each triangle is 3 consecutive vertices.
-                 // Compute the tint per-vertex based on its Z position to keep the gradient
-                 // continuous across faces (important for large vertical walls).
-                 for (let i = 0; i < pos.count; i++) {
-                     const z = pos.getZ(i)
-                     const t = (z - minZ) / range
-                     const c = bottomColor.clone().lerp(topColor, t)
-
-                     const k = i * 3
-                     colors[k] = c.r
-                     colors[k + 1] = c.g
-                     colors[k + 2] = c.b
-                 }
-                 geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
-             }
-         }
-     }
-
+    const neutralLighting = previewStyle === "colors"
     const material = new THREE.MeshStandardMaterial({
         color: 0xc4d0dd,
-        metalness: 0.8,
-        roughness: 0.4,
+        metalness: neutralLighting ? 0.0 : 0.8,
+        roughness: neutralLighting ? 0.55 : 0.4,
         flatShading: true,
         vertexColors: true,
     })
@@ -233,22 +239,22 @@ async function stlBytesToGlb(stlBytes) {
     scene.add(mesh)
 
     // Add a few basic lights so the exported GLB shades nicely even without an HDR environment.
-    const lightA = new THREE.DirectionalLight(0xd6629e, 20) // pink
+    const lightA = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xd6629e, neutralLighting ? 4 : 20) // top right
     lightA.position.set(1000, 1000, 1000) // north east, top
     lightA.lookAt(0, 0, 0)
     scene.add(lightA)
 
-    const lightB = new THREE.DirectionalLight(0x5571a8, 20) // blue
+    const lightB = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0x5571a8, neutralLighting ? 2.5 : 20) // top left
     lightB.position.set(-1000, 1000, 1000) // north west, top
     lightB.lookAt(0, 0, 0)
     scene.add(lightB)
 
-    const lightC = new THREE.DirectionalLight(0xbf86bb, 15) // purple
+    const lightC = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xbf86bb, neutralLighting ? 1 : 15) // bottom
     lightC.position.set(0, -1000, -1000) // south, bottom
     lightC.lookAt(0, 0, 0)
     scene.add(lightC)
 
-    const lightD = new THREE.DirectionalLight(0xbf86bb, 15) // purple
+    const lightD = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xbf86bb, neutralLighting ? 1.5 : 15) // front
     lightD.position.set(0, -1000, 1000) // south, top
     lightD.lookAt(0, 0, 0)
     scene.add(lightD)
@@ -268,6 +274,21 @@ async function stlBytesToGlb(stlBytes) {
             { binary: true },
         )
     })
+}
+
+function offBytesToMesh(offBytes) {
+    const text = new TextDecoder().decode(offBytes)
+    return parseOffMesh(text)
+}
+
+async function offMeshToGlb(mesh, previewStyle) {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3))
+    if (mesh.colors) {
+        geometry.setAttribute("color", new THREE.BufferAttribute(mesh.colors, 3))
+    }
+    applyDepthCueing(geometry, previewStyle)
+    return geometryToGlb(geometry, previewStyle)
 }
 
 async function createInstance() {
@@ -290,7 +311,7 @@ async function createInstance() {
     return instance
 }
 
-async function renderOnce({ input, normalParams, additionalParams }) {
+async function renderOnce({ input, normalParams, additionalParams, previewStyle }) {
     const instance = await createInstance()
 
     // Eagerly fetch all inputs once (parallel), then materialize them in each
@@ -316,9 +337,14 @@ async function renderOnce({ input, normalParams, additionalParams }) {
         }),
     )
 
-    const output = "/output.stl"
+    const output = "/output.off"
     try {
         instance.FS.unlink(output)
+    } catch (e) {
+        // ignore
+    }
+    try {
+        instance.FS.unlink("/camera-summary.json")
     } catch (e) {
         // ignore
     }
@@ -328,7 +354,7 @@ async function renderOnce({ input, normalParams, additionalParams }) {
         output,
         {% for feat in config.openscad.enable_features %}"--enable={{ feat }}",
         {% endfor %}
-        "--export-format=binstl",
+        "--export-format=off",
         "-p",
         "/parameters.json",
         "-P",
@@ -345,8 +371,10 @@ async function renderOnce({ input, normalParams, additionalParams }) {
     logInfo("Line:", args)
     try {
         instance.callMain(args)
-        const stlBytes = instance.FS.readFile(output)
-        const glb = await stlBytesToGlb(stlBytes)
+        const offBytes = instance.FS.readFile(output)
+        const mesh = offBytesToMesh(offBytes)
+        const glb = await offMeshToGlb(mesh, previewStyle || "shaded")
+        const stl = offMeshToBinaryStl(mesh)
         let camera = null
         try {
             const summaryBytes = instance.FS.readFile("/camera-summary.json", { encoding: "utf8" })
@@ -360,7 +388,7 @@ async function renderOnce({ input, normalParams, additionalParams }) {
         self.postMessage({
             type: "ok",
             glb: glb,
-            stl: stlBytes,
+            stl: stl,
             camera: camera,
         })
     } catch (e) {
@@ -391,6 +419,7 @@ self.addEventListener("message", (event) => {
             input: msg.input,
             normalParams: msg.normalParams,
             additionalParams: msg.additionalParams,
+            previewStyle: msg.previewStyle,
         })
     })
     runQueue.catch((e) => {

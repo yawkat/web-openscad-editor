@@ -133,6 +133,9 @@ description-extra-html = "<p>This is a description of my model.</p>"
 export-file-stem = {fixed = "my-model"}
 # Or derive it from model parameters (same JS scope as display-condition):
 export-file-stem = {js = "magnets ? 'bin-with-magnets' : 'bin'"}
+
+# Preview rendering style. Use "colors" to show OpenSCAD face colors with neutral lighting.
+preview-style = "colors"
 ```
 
 #### Additional Parameters

@@ -97,6 +97,7 @@ module label_3d(str, font, size, depth, anchor) {
 
 module bosl2_sample(size) {
   translate([0, -depth / 2 - size * 0.8, size / 4])
+    color("#6fbf73")
     cuboid(
       [size, size, size / 2],
       rounding = size / 8,
@@ -117,6 +118,7 @@ module shading_demo_structures(model_w, model_d, h, wall_w, wall_d, pocket_d) {
     cube([wall_w, wall_d, h], center = true);
 
   // pocketed wall
+  color("#d95f5f")
   difference() {
     translate([spacing_x, spacing_y, h / 2])
       cube([wall_w, wall_d, h], center = true);
@@ -138,11 +140,14 @@ model_h = height;
 difference() {
   union() {
     if (shape == "rounded box")
-      rounded_box(width, depth, model_h, rounding);
+      color("#4c78a8")
+        rounded_box(width, depth, model_h, rounding);
     else if (shape == "capsule")
-      capsule(width, depth, model_h);
+      color("#f2a541")
+        capsule(width, depth, model_h);
     else
-      ring(min(width, depth), min(width, depth) * 0.6, model_h);
+      color("#8e6bbf")
+        ring(min(width, depth), min(width, depth) * 0.6, model_h);
 
     if (show_baseplate && baseplate_thickness > 0)
       translate([0, 0, -baseplate_thickness])
@@ -151,7 +156,8 @@ difference() {
     if (show_text) {
       // Put text on the top face.
       translate([0, 0, model_h + text_z_offset])
-        label_3d(text_string, text_font, text_size, text_depth, text_anchor);
+        color("#f0e442")
+          label_3d(text_string, text_font, text_size, text_depth, text_anchor);
     }
 
     if (show_bosl2_sample)

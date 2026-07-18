@@ -6,6 +6,7 @@ commit = "fbcdfdd511b6abfde93c43c8f85c2bd24ee7a02d"
 
 [[model]]
 file = "test.scad"
+preview-style = "colors"
 export-file-stem = {js = "shape + '-' + width + 'x' + depth + 'x' + height"}
 # Track render events with selected model parameters
 umami-track-render = ["shape", "width", "depth", "height"]
