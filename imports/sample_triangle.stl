@@ -1,9 +1,30 @@
-solid sample_triangle
-  facet normal 0 0 1
+solid sample_tetrahedron
+  facet normal 0 0 -1
     outer loop
       vertex 0 0 0
       vertex 8 0 0
       vertex 0 8 0
     endloop
   endfacet
-endsolid sample_triangle
+  facet normal 0 -1 1
+    outer loop
+      vertex 0 0 0
+      vertex 8 0 0
+      vertex 0 0 8
+    endloop
+  endfacet
+  facet normal 1 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 0 8 0
+      vertex 0 0 8
+    endloop
+  endfacet
+  facet normal 1 1 1
+    outer loop
+      vertex 8 0 0
+      vertex 0 8 0
+      vertex 0 0 8
+    endloop
+  endfacet
+endsolid sample_tetrahedron
