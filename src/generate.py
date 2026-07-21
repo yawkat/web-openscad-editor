@@ -257,11 +257,27 @@ def main():
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
 # Matches `file = "..."` or `file = '...'` within import arguments.
 pattern_import_named = re.compile(
-    r"""\bfile\s*=\s*(?:"(?P<dq>(?:\\.|[^"\\])*)"|'(?P<sq>(?:\\.|[^'\\])*)')"""
+    r"""
+    \bfile\s*=\s*
+    (?:
+      "(?P<dq>(?:\\.|[^"\\])*)"
+      |
+      '(?P<sq>(?:\\.|[^'\\])*)'
+    )
+    """,
+    re.VERBOSE,
 )
 # Matches an import argument list that starts with a path string.
 pattern_import_positional = re.compile(
-    r"""^\s*(?:"(?P<dq>(?:\\.|[^"\\])*)"|'(?P<sq>(?:\\.|[^'\\])*)')"""
+    r"""
+    ^\s*
+    (?:
+      "(?P<dq>(?:\\.|[^"\\])*)"
+      |
+      '(?P<sq>(?:\\.|[^'\\])*)'
+    )
+    """,
+    re.VERBOSE,
 )
 pattern_import_start = re.compile(r"\bimport\s*\(")
 
@@ -280,6 +296,8 @@ def scad_import_path(line: str) -> str | None:
 
     Supports both `import("path.stl")` and `import(..., file = "path.stl")`.
     Returns `None` when no import statement with a path is found.
+    Multi-line import calls are not parsed here because dependency scanning is
+    line-based; malformed calls also return `None`.
     """
     start = pattern_import_start.search(line)
     if start is None:
@@ -289,9 +307,11 @@ def scad_import_path(line: str) -> str | None:
     quote: str | None = None
     escaped = False
     close_paren: int | None = None
+    # Parse one line in O(n), tracking quotes and nested parentheses.
     for index in range(open_paren + 1, len(line)):
         ch = line[index]
         if quote is not None:
+            # Treat backslash as escaping only the following character.
             if escaped:
                 escaped = False
             elif ch == "\\":
