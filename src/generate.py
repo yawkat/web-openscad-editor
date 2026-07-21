@@ -1,4 +1,5 @@
 import argparse
+import ast
 import os
 import tempfile
 import typing
@@ -254,6 +255,92 @@ def main():
 
 
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
+# Matches `file = "..."` or `file = '...'` within import arguments.
+pattern_import_named = re.compile(
+    r"""
+    \bfile\s*=\s*
+    (?:
+      "(?P<dq>(?:\\.|[^"\\])*)"
+      |
+      '(?P<sq>(?:\\.|[^'\\])*)'
+    )
+    """,
+    re.VERBOSE,
+)
+# Matches an import argument list that starts with a path string.
+pattern_import_positional = re.compile(
+    r"""
+    ^\s*
+    (?:
+      "(?P<dq>(?:\\.|[^"\\])*)"
+      |
+      '(?P<sq>(?:\\.|[^'\\])*)'
+    )
+    """,
+    re.VERBOSE,
+)
+pattern_import_start = re.compile(r"\bimport\s*\(")
+
+
+def _decode_import_string(match: re.Match[str]) -> str:
+    literal: str
+    if match.group("dq") is not None:
+        literal = f'"{match.group("dq")}"'
+    else:
+        literal = f"'{match.group('sq')}'"
+    return ast.literal_eval(literal)
+
+
+def scad_import_path(line: str) -> str | None:
+    """Extract an imported file path from a single OpenSCAD source line.
+
+    Supports both `import("path.stl")` and `import(..., file = "path.stl")`.
+    Returns `None` when no import statement with a path is found.
+    Multi-line import calls are not parsed here because dependency scanning is
+    line-based; malformed calls also return `None`.
+    """
+    start = pattern_import_start.search(line)
+    if start is None:
+        return None
+    open_paren = line.find("(", start.start())
+    depth = 1
+    quote: str | None = None
+    escaped = False
+    close_paren: int | None = None
+    # Parse one line in O(n), tracking quotes and nested parentheses.
+    for index in range(open_paren + 1, len(line)):
+        ch = line[index]
+        if quote is not None:
+            # Treat backslash as escaping only the following character.
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch == "(":
+            depth += 1
+            continue
+        if ch == ")":
+            depth -= 1
+            if depth == 0:
+                close_paren = index
+                break
+    if close_paren is None:
+        return None
+    args = line[open_paren + 1 : close_paren]
+
+    named = pattern_import_named.search(args)
+    if named:
+        return _decode_import_string(named)
+    positional = pattern_import_positional.match(args)
+    if positional:
+        return _decode_import_string(positional)
+    return None
 
 
 def scad_library_cache_dir() -> str:
@@ -382,6 +469,18 @@ def load_scad_recursively(
                 fs,
                 library_roots,
             )
+            continue
+        import_path = scad_import_path(line)
+        if import_path is not None:
+            import_host_path = resolve_scad_include(host_path, import_path, library_roots)
+            import_virtual_path = host_path_to_virtual_with_libraries(
+                root, import_host_path, library_roots
+            )
+            if import_virtual_path in fs:
+                continue
+            print(f"Including {import_virtual_path}")
+            with open(import_host_path, "rb") as f:
+                fs[import_virtual_path] = f.read()
 
 
 def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):

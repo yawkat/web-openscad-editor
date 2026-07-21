@@ -163,6 +163,10 @@ difference() {
     if (show_bosl2_sample)
       bosl2_sample(bosl2_sample_size);
 
+    // Sample import() statement for dependency-loading demos.
+    // Offset keeps it outside the main model footprint.
+    translate([0, depth / 2 + 12, 0]) import("imports/sample_tetrahedron.stl");
+
     if (show_shading_demo)
       shading_demo_structures(
         width,

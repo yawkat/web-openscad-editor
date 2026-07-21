@@ -42,3 +42,47 @@ def test_load_scad_recursively_with_library_include(tmp_path):
     assert "/model.scad" in fs
     assert "/BOSL2/std.scad" in fs
     assert "/BOSL2/constants.scad" in fs
+
+
+def test_load_scad_recursively_with_import_statement(tmp_path):
+    imports_dir = tmp_path / "imports"
+    imports_dir.mkdir()
+    model_file = tmp_path / "model.scad"
+    imported_file = imports_dir / "thing.stl"
+    imported_file.write_bytes(bytes(range(64)))
+    model_file.write_text('import("imports/thing.stl");\n')
+
+    fs = {}
+    load_scad_recursively(str(model_file), str(tmp_path), fs)
+
+    assert "/model.scad" in fs
+    assert "/imports/thing.stl" in fs
+
+
+def test_load_scad_recursively_with_named_import_file_statement(tmp_path):
+    model_file = tmp_path / "model.scad"
+    imported_file = tmp_path / "mesh.3mf"
+    imported_file.write_bytes(bytes(range(32)))
+    model_file.write_text('import(convexity = max(1, 3), file = "mesh.3mf");\n')
+
+    fs = {}
+    load_scad_recursively(str(model_file), str(tmp_path), fs)
+
+    assert "/model.scad" in fs
+    assert "/mesh.3mf" in fs
+
+
+def test_load_scad_recursively_does_not_recurse_into_imports(tmp_path):
+    model_file = tmp_path / "model.scad"
+    imported_scad = tmp_path / "imported.scad"
+    nested_scad = tmp_path / "nested.scad"
+    imported_scad.write_text('include <nested.scad>\n')
+    nested_scad.write_text("from_nested = true;\n")
+    model_file.write_text('import("imported.scad");\n')
+
+    fs = {}
+    load_scad_recursively(str(model_file), str(tmp_path), fs)
+
+    assert "/model.scad" in fs
+    assert "/imported.scad" in fs
+    assert "/nested.scad" not in fs
