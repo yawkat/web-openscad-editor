@@ -254,6 +254,22 @@ def main():
 
 
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
+pattern_import_named = re.compile(
+    r"\bimport\s*\([^)]*\bfile\s*=\s*(?P<quote>['\"])(?P<path>[^'\"]+)(?P=quote)"
+)
+pattern_import_positional = re.compile(
+    r"\bimport\s*\(\s*(?P<quote>['\"])(?P<path>[^'\"]+)(?P=quote)"
+)
+
+
+def scad_import_path(line: str) -> str | None:
+    named = pattern_import_named.search(line)
+    if named:
+        return named.group("path")
+    positional = pattern_import_positional.search(line)
+    if positional:
+        return positional.group("path")
+    return None
 
 
 def scad_library_cache_dir() -> str:
@@ -378,6 +394,15 @@ def load_scad_recursively(
         if include:
             load_scad_recursively(
                 resolve_scad_include(host_path, include.group(1), library_roots),
+                root,
+                fs,
+                library_roots,
+            )
+            continue
+        import_path = scad_import_path(line)
+        if import_path is not None:
+            load_scad_recursively(
+                resolve_scad_include(host_path, import_path, library_roots),
                 root,
                 fs,
                 library_roots,
