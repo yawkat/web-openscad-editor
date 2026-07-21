@@ -20,7 +20,7 @@ solid sample_triangle
       vertex 0 0 8
     endloop
   endfacet
-  facet normal 0.57735 0.57735 0.57735
+  facet normal 0.5773502691896258 0.5773502691896258 0.5773502691896258
     outer loop
       vertex 8 0 0
       vertex 0 8 0
