@@ -22,7 +22,6 @@ baseplate_thickness = 2; // [0:0.5:10]
 
 show_bosl2_sample = true;
 bosl2_sample_size = 12; // [4:1:30]
-show_import_sample = false;
 
 show_text = true;
 text_string = "web-openscad-editor";
@@ -164,8 +163,8 @@ difference() {
     if (show_bosl2_sample)
       bosl2_sample(bosl2_sample_size);
 
-    if (show_import_sample)
-      translate([0, depth / 2 + 12, 0]) import("imports/sample_triangle.stl");
+    // Disabled sample `import(...)` statement for dependency-loading demos.
+    *translate([0, depth / 2 + 12, 0]) import("imports/sample_triangle.stl");
 
     if (show_shading_demo)
       shading_demo_structures(
