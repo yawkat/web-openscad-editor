@@ -163,7 +163,8 @@ difference() {
     if (show_bosl2_sample)
       bosl2_sample(bosl2_sample_size);
 
-    // Disabled sample `import(...)` statement for dependency-loading demos.
+    // Disabled sample import() statement for dependency-loading demos.
+    // Offset keeps it outside the main model footprint when enabled manually.
     *translate([0, depth / 2 + 12, 0]) import("imports/sample_triangle.stl");
 
     if (show_shading_demo)
