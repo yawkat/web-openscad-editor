@@ -472,12 +472,15 @@ def load_scad_recursively(
             continue
         import_path = scad_import_path(line)
         if import_path is not None:
-            load_scad_recursively(
-                resolve_scad_include(host_path, import_path, library_roots),
-                root,
-                fs,
-                library_roots,
+            import_host_path = resolve_scad_include(host_path, import_path, library_roots)
+            import_virtual_path = host_path_to_virtual_with_libraries(
+                root, import_host_path, library_roots
             )
+            if import_virtual_path in fs:
+                continue
+            print(f"Including {import_virtual_path}")
+            with open(import_host_path, "rb") as f:
+                fs[import_virtual_path] = f.read()
 
 
 def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):

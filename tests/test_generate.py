@@ -70,3 +70,19 @@ def test_load_scad_recursively_with_named_import_file_statement(tmp_path):
 
     assert "/model.scad" in fs
     assert "/mesh.3mf" in fs
+
+
+def test_load_scad_recursively_does_not_recurse_into_imports(tmp_path):
+    model_file = tmp_path / "model.scad"
+    imported_scad = tmp_path / "imported.scad"
+    nested_scad = tmp_path / "nested.scad"
+    imported_scad.write_text('include <nested.scad>\n')
+    nested_scad.write_text("from_nested = true;\n")
+    model_file.write_text('import("imported.scad");\n')
+
+    fs = {}
+    load_scad_recursively(str(model_file), str(tmp_path), fs)
+
+    assert "/model.scad" in fs
+    assert "/imported.scad" in fs
+    assert "/nested.scad" not in fs
