@@ -63,7 +63,7 @@ def test_load_scad_recursively_with_named_import_file_statement(tmp_path):
     model_file = tmp_path / "model.scad"
     imported_file = tmp_path / "mesh.3mf"
     imported_file.write_bytes(bytes(range(32)))
-    model_file.write_text('import(convexity = 3, file = "mesh.3mf");\n')
+    model_file.write_text('import(convexity = max(1, 3), file = "mesh.3mf");\n')
 
     fs = {}
     load_scad_recursively(str(model_file), str(tmp_path), fs)

@@ -1,4 +1,5 @@
 import argparse
+import ast
 import os
 import tempfile
 import typing
@@ -254,14 +255,24 @@ def main():
 
 
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
-# Matches import statements where `file = "..."`
+# Matches `file = "..."` or `file = '...'` within import arguments.
 pattern_import_named = re.compile(
-    r"\bimport\s*\([^)]*\bfile\s*=\s*(?P<quote>['\"])(?P<path>[^'\"]+)(?P=quote)"
+    r"""\bfile\s*=\s*(?:"(?P<dq>(?:\\.|[^"\\])*)"|'(?P<sq>(?:\\.|[^'\\])*)')"""
 )
-# Matches import statements where the first argument is the path string.
+# Matches an import argument list that starts with a path string.
 pattern_import_positional = re.compile(
-    r"\bimport\s*\(\s*(?P<quote>['\"])(?P<path>[^'\"]+)(?P=quote)"
+    r"""^\s*(?:"(?P<dq>(?:\\.|[^"\\])*)"|'(?P<sq>(?:\\.|[^'\\])*)')"""
 )
+pattern_import_start = re.compile(r"\bimport\s*\(")
+
+
+def _decode_import_string(match: re.Match[str]) -> str:
+    literal: str
+    if match.group("dq") is not None:
+        literal = f'"{match.group("dq")}"'
+    else:
+        literal = f"'{match.group('sq')}'"
+    return ast.literal_eval(literal)
 
 
 def scad_import_path(line: str) -> str | None:
@@ -270,12 +281,45 @@ def scad_import_path(line: str) -> str | None:
     Supports both `import("path.stl")` and `import(..., file = "path.stl")`.
     Returns `None` when no import statement with a path is found.
     """
-    named = pattern_import_named.search(line)
+    start = pattern_import_start.search(line)
+    if start is None:
+        return None
+    open_paren = line.find("(", start.start())
+    depth = 1
+    quote: str | None = None
+    escaped = False
+    close_paren: int | None = None
+    for index in range(open_paren + 1, len(line)):
+        ch = line[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            continue
+        if ch == "(":
+            depth += 1
+            continue
+        if ch == ")":
+            depth -= 1
+            if depth == 0:
+                close_paren = index
+                break
+    if close_paren is None:
+        return None
+    args = line[open_paren + 1 : close_paren]
+
+    named = pattern_import_named.search(args)
     if named:
-        return named.group("path")
-    positional = pattern_import_positional.search(line)
+        return _decode_import_string(named)
+    positional = pattern_import_positional.match(args)
     if positional:
-        return positional.group("path")
+        return _decode_import_string(positional)
     return None
 
 
