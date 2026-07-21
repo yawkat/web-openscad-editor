@@ -1,4 +1,4 @@
-solid sample_triangle
+solid sample_tetrahedron
   facet normal 0 0 -1
     outer loop
       vertex 0 0 0
@@ -27,4 +27,4 @@ solid sample_triangle
       vertex 0 0 8
     endloop
   endfacet
-endsolid sample_triangle
+endsolid sample_tetrahedron
