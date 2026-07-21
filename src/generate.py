@@ -254,15 +254,22 @@ def main():
 
 
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
+# Matches import statements where `file = "..."`
 pattern_import_named = re.compile(
     r"\bimport\s*\([^)]*\bfile\s*=\s*(?P<quote>['\"])(?P<path>[^'\"]+)(?P=quote)"
 )
+# Matches import statements where the first argument is the path string.
 pattern_import_positional = re.compile(
     r"\bimport\s*\(\s*(?P<quote>['\"])(?P<path>[^'\"]+)(?P=quote)"
 )
 
 
 def scad_import_path(line: str) -> str | None:
+    """Extract an imported file path from a single OpenSCAD source line.
+
+    Supports both `import("path.stl")` and `import(..., file = "path.stl")`.
+    Returns `None` when no import statement with a path is found.
+    """
     named = pattern_import_named.search(line)
     if named:
         return named.group("path")
