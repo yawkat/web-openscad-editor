@@ -103,11 +103,15 @@
           "default": 0.2,
           "description": "Angular tessellation tolerance (radians) used for the preview and STL export"
         },
-        "packages": {
-          "type": "array",
-          "description": "Additional Python packages (pip requirement strings) installed with micropip in the browser before running models",
-          "items": { "type": "string" },
-          "default": []
+        "project": {
+          "type": "string",
+          "default": ".",
+          "description": "Directory of the uv project (pyproject.toml and uv.lock) that declares the dependencies of the CadQuery models, relative to the configuration file"
+        },
+        "pyodide-version": {
+          "type": "string",
+          "default": "314.0.8",
+          "description": "Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI."
         }
       },
       "additionalProperties": false
@@ -169,7 +173,7 @@
         },
         "additional-params": {
           "type": "array",
-          "description": "Array of parameter JSON files",
+          "description": "Array of parameter JSON files (OpenSCAD runtime only)",
           "items": {
             "type": "string"
           },

@@ -11,6 +11,8 @@ import shutil
 import hashlib
 import tomllib
 
+import cadquery_build
+import cadquery_schema
 import model
 import config_generated
 
@@ -115,7 +117,31 @@ def main():
             library_include_paths + ([existing_path] if existing_path else [])
         )
 
+    config_dir = os.path.dirname(args.config)
+    cadquery_project = os.path.join(
+        config_dir, config.cadquery.project if config.cadquery.project is not None else "."
+    )
+    cadquery_schemas: typing.Dict[str, typing.Any] = {}
+    if uses_cadquery:
+        cadquery_schemas = cadquery_build.extract_schemas(
+            cadquery_project,
+            [
+                os.path.join(config_dir, c.file)
+                for c in model_configs
+                if model.model_runtime(c) == config_generated.Runtime.cadquery
+            ],
+        )
+
     class ParamsLoaderImpl(model.ParamsLoader):
+        def load_cadquery(self, declared_path: str) -> model.ParamSet:
+            extracted = cadquery_schemas[os.path.abspath(declared_path)]
+            try:
+                return cadquery_schema.schema_to_params(
+                    extracted["schema"], extracted["defaults"]
+                )
+            except cadquery_schema.SchemaError as e:
+                raise SystemExit(f"{declared_path}: {e}")
+
         def load_json(self, declared_path: str) -> model.ParamSet:
             with open(declared_path, "r", encoding="utf-8") as f:
                 return json.load(f)["parameters"]
@@ -249,16 +275,12 @@ def main():
             },
         )
     if uses_cadquery:
-        cadquery_lock = load_cadquery_lock()
-        wheels_dir = "cadquery-wheels"
-        wheel_files = ensure_cadquery_wheels(
-            cadquery_lock, os.path.join(args.output, wheels_dir)
+        runtime_variables = cadquery_build.prepare_runtime(
+            cadquery_project,
+            config.cadquery.pyodide_version or "314.0.8",
+            args.output,
+            "cadquery",
         )
-        src_dir = os.path.dirname(__file__)
-        python_sources = {}
-        for module_name in ["cadquery_params", "cadquery_runner", "cadquery_stubs"]:
-            with open(os.path.join(src_dir, module_name + ".py"), "r", encoding="utf-8") as f:
-                python_sources[module_name + ".py"] = f.read()
         worker_script_names[config_generated.Runtime.cadquery] = write_worker(
             j2env,
             "cadquery_worker.js.jinja2",
@@ -266,10 +288,8 @@ def main():
             args.output,
             {
                 **variables_base,
+                **runtime_variables,
                 "fs_manifest": manifests[config_generated.Runtime.cadquery],
-                "cadquery_lock": cadquery_lock,
-                "cadquery_wheels": [f"{wheels_dir}/{name}" for name in wheel_files],
-                "cadquery_python_sources": python_sources,
             },
         )
     for ctx in contexts:
@@ -323,31 +343,6 @@ def write_worker(
     with open(os.path.join(output, name), "w") as f:
         f.write(source)
     return name
-
-
-def load_cadquery_lock() -> typing.Dict[str, typing.Any]:
-    with open(
-        os.path.join(os.path.dirname(__file__), "cadquery_wheels.json"),
-        "r",
-        encoding="utf-8",
-    ) as f:
-        return json.load(f)
-
-
-def ensure_cadquery_wheels(
-    lock: typing.Mapping[str, typing.Any], output_dir: str
-) -> list[str]:
-    """Download the pinned CadQuery wheels and copy them to ``output_dir``."""
-    if os.path.isdir(output_dir):
-        shutil.rmtree(output_dir)
-    os.makedirs(output_dir)
-    names = []
-    for wheel in lock["wheels"]:
-        cached = os.path.join("build", "cadquery", wheel["filename"])
-        download(cached, wheel["url"], wheel["sha256"])
-        shutil.copyfile(cached, os.path.join(output_dir, wheel["filename"]))
-        names.append(wheel["filename"])
-    return names
 
 
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")

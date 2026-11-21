@@ -286,7 +286,7 @@
             {% endif %}
             {% set state.current_group = param.group %}
             {%- if state.current_group.config.control_boolean -%}
-                <label class="group-header"><h3><span class="group-header-control"><input class="customizer" type="checkbox" attr-name="{{ param.name }}"></span>
+                <label class="group-header"><h3><span class="group-header-control"><input class="customizer" type="checkbox" attr-name="{{ state.current_group.config.control_boolean }}"></span>
                     {{- state.current_group.name -}}
                     {%- if state.current_group.config.help_link %}
                         {{ help_link(state.current_group.config.help_link) }}
@@ -308,7 +308,8 @@
         {% if param.metadata.display_condition.fixed %}
         <div class="col-12"{% if param.metadata.display_condition.js %} data-display-condition="{{ param.metadata.display_condition.js }}"{% endif %}>
             <label for="{{ pid }}">
-                {% for piece in param.name.split("_") -%}
+                {#- Nested CadQuery parameters (e.g. "lid.height") show their last segment; the tab names the rest. #}
+                {% for piece in param.name.split(".")[-1].split("_") -%}
                     {{ piece }}
                     {%- if not loop.last %}<span class="param_underscore">_</span>{% endif -%}
                 {%- endfor %}

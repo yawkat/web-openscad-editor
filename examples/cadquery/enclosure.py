@@ -1,56 +1,76 @@
-# web-openscad-editor CadQuery example
-#
-# A parametric enclosure with a lid. This exercises the CadQuery runtime:
-# customizer comments, a local helper module, and multiple colored parts.
+"""A parametric enclosure with a lid.
+
+This is a plain Python module: web-openscad-editor calls build() with the
+values from its customizer, and you can run it locally too, e.g. with
+`uv run python enclosure.py` (writes enclosure.step) or ocp_vscode.
+"""
+
+from typing import Literal
 
 import cadquery as cq
+from pydantic import BaseModel, Field
 
+from common import PrintSettings
 from helpers import hole_positions, rounded_box
 
-# [Enclosure]
 
-# Outer width and depth in mm
-size = [80, 50]  # [20:1:200]
-# Height of the base in mm
-height = 30  # [10:1:100]
-wall = 2.0  # [1:0.2:5]
-# Radius of the vertical edges in mm
-corner_radius = 5  # [0:0.5:20]
-
-describe_parameter(wall, "Wall thickness in mm")
-
-# [Lid]
-
-show_lid = True
-lid_height = 6  # [2:0.5:20]
-lid_color = "steelblue"  # [steelblue, tomato, gold, seagreen]
-# Distance between base and lid in the preview
-explode = 10  # [0:1:50]
-
-# [Mounting holes]
-
-hole_pattern = "corners"  # [corners:Four corners, sides:Two sides, none:No holes]
-hole_diameter = 3.2  # [2:0.1:8]
-
-width, depth = size
-radius = min(corner_radius, width / 2 - wall, depth / 2 - wall)
-
-base = rounded_box(width, depth, height, radius).faces(">Z").shell(-wall)
-points = hole_positions(hole_pattern, width, depth, inset=wall + hole_diameter)
-if points:
-    base = (
-        base.faces("<Z")
-        .workplane(centerOption="CenterOfBoundBox")
-        .pushPoints(points)
-        .hole(hole_diameter, wall * 2)
+class Lid(BaseModel):
+    show: bool = True
+    height: float = Field(6, ge=2, le=20, multiple_of=0.5, description="Lid height in mm")
+    color: Literal["steelblue", "tomato", "gold", "seagreen"] = "steelblue"
+    explode: float = Field(
+        10, ge=0, le=50, description="Distance between base and lid in the preview"
     )
-show_object(base, name="base", options={"color": "lightgray"})
 
-if show_lid:
-    lid = (
-        rounded_box(width, depth, lid_height, radius)
-        .faces("<Z")
-        .shell(-wall)
-        .translate((0, 0, height + explode))
+
+class MountingHoles(BaseModel):
+    pattern: Literal["corners", "sides", "none"] = Field(
+        "corners",
+        json_schema_extra={
+            "option-labels": {"corners": "Four corners", "sides": "Two sides", "none": "No holes"}
+        },
     )
-    show_object(lid, name="lid", options={"color": lid_color})
+    diameter: float = Field(3.2, ge=2, le=8, multiple_of=0.1)
+
+
+# Every top-level field of a nested model becomes a customizer tab.
+class Params(PrintSettings):
+    size: tuple[float, float] = Field((80, 50), description="Outer width and depth in mm")
+    height: float = Field(30, ge=10, le=100, description="Height of the base in mm")
+    corner_radius: float = Field(
+        5, ge=0, le=20, multiple_of=0.5, description="Radius of the vertical edges in mm"
+    )
+    lid: Lid = Field(Lid(), title="Lid")
+    holes: MountingHoles = Field(MountingHoles(), title="Mounting holes")
+
+
+def build(p: Params) -> cq.Assembly:
+    width, depth = p.size
+    radius = min(p.corner_radius, width / 2 - p.wall, depth / 2 - p.wall)
+
+    base = rounded_box(width, depth, p.height, radius).faces(">Z").shell(-p.wall)
+    points = hole_positions(p.holes.pattern, width, depth, inset=p.wall + p.holes.diameter)
+    if points:
+        base = (
+            base.faces("<Z")
+            .workplane(centerOption="CenterOfBoundBox")
+            .pushPoints(points)
+            .hole(p.holes.diameter, p.wall * 2)
+        )
+
+    # An Assembly gives each part a name and a color, in the preview and in STEP exports.
+    assembly = cq.Assembly(name="enclosure")
+    assembly.add(base, name="base", color=cq.Color("lightgray"))
+    if p.lid.show:
+        lid = rounded_box(width, depth, p.lid.height, radius).faces("<Z").shell(-p.wall)
+        assembly.add(
+            lid,
+            name="lid",
+            color=cq.Color(p.lid.color),
+            loc=cq.Location((0, 0, p.height + p.lid.explode)),
+        )
+    return assembly
+
+
+if __name__ == "__main__":
+    build(Params()).export("enclosure.step")

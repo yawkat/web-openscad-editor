@@ -102,18 +102,31 @@ commit = "0123456789abcdef0123456789abcdef01234567"
 
 ### CadQuery Settings
 
-Settings for [CadQuery models](#cadquery-models) are configured in the `[cadquery]` table. All settings are optional. CadQuery and its dependencies are pinned by the generator and bundled into the output; Pyodide itself is loaded from the jsDelivr CDN.
+Settings for [CadQuery models](#cadquery-models) are configured in the `[cadquery]` table. All settings are optional.
 
 ```toml
 [cadquery]
+# Directory of the uv project (pyproject.toml + uv.lock) that declares the dependencies of
+# your CadQuery models, relative to the configuration file. The same project is used for
+# local development, and its lock decides which package versions run in the browser.
+project = "models"
+# Pyodide version that runs the models in the browser. The OCP.wasm build of OpenCascade
+# must be available for its ABI, so only change this together with cadquery-ocp.
+pyodide-version = "314.0.8"
 # Tessellation tolerances used for the preview and the STL export. Smaller values give
 # smoother curves but larger files. The linear tolerance is in mm, the angular one in radians.
 tolerance = 0.1
 angular-tolerance = 0.2
-# Additional pure-Python packages to install with micropip in the browser before running
-# models. These are downloaded from PyPI at runtime.
-packages = ["cq_gears"]
 ```
+
+The generator exports the project's lock (`uv export --format pylock.toml`) and maps each package to the browser:
+
+- `cadquery-ocp` is replaced by the matching [OCP.wasm](https://github.com/yeicor/OCP.wasm) build.
+- Packages that [Pyodide](https://pyodide.org/) ships (numpy, pydantic, …) use Pyodide's version.
+- Other packages need a pure-Python wheel; they are bundled into the export, precompiled.
+- VTK, trame and numba are not available in the browser and are replaced by stubs.
+
+To update the dependencies, run `uv lock --upgrade` in the project, or let [Renovate](https://docs.renovatebot.com/modules/manager/pep621/) do it.
 
 ### Model Files
 
@@ -285,48 +298,80 @@ Note that if there is no matching parameter for a metadata definition, even if t
 
 ### CadQuery Models
 
-Set `runtime = "cadquery"` to use a CadQuery Python script as a model:
+Set `runtime = "cadquery"` to use a [CadQuery](https://github.com/CadQuery/cadquery) Python module as a model:
 
 ```toml
+[cadquery]
+project = "models"
+
 [[model]]
-file = "enclosure.py"
+file = "models/enclosure.py"
 runtime = "cadquery"
-# Show the colors passed to show_object in the preview
+# Show the part colors of the returned assembly in the preview
 preview-style = "colors"
 ```
 
-All model configuration options above work for CadQuery models too, except `additional-params-scad`.
-
-Following CadQuery's [cqgi](https://cadquery.readthedocs.io/en/latest/cqgi.html) conventions, every top-level assignment of a constant (number, string, boolean or a list of numbers) becomes a customizable parameter. Names starting with an underscore are not exposed. The customizer metadata uses the same comment syntax as the OpenSCAD customizer, and `describe_parameter` is supported as well:
+A model is a plain Python module with a `build` function. The [Pydantic](https://docs.pydantic.dev/) model annotated on its first parameter declares the customizer parameters, and `build` returns a `Workplane`, `Shape`, `Sketch` or `Assembly`. Return an `Assembly` to give parts names and colors in the preview and in STEP exports.
 
 ```python
+from typing import Literal
+
 import cadquery as cq
+from pydantic import BaseModel, Field
 
-# [Size]
+from common import PrintSettings  # share parameters between models by importing them
 
-# Outer width and depth in mm
-size = [80, 50]  # [20:1:200]
-height = 30  # [10:1:100]
-describe_parameter(height, "Height in mm")
 
-# [Style]
-color = "steelblue"  # [steelblue, tomato, gold]
-holes = "corners"  # [corners:Four corners, none:No holes]
+class Lid(BaseModel):
+    show: bool = True
+    height: float = Field(6, ge=2, le=20, multiple_of=0.5, description="Lid height in mm")
+    color: Literal["steelblue", "tomato"] = Field(
+        "steelblue", json_schema_extra={"option-labels": {"tomato": "Tomato red"}}
+    )
 
-# [Hidden]
-tolerance = 0.2
 
-part = cq.Workplane().box(size[0], size[1], height)
-# Every shown object becomes a named, colored part. Colors can be names, "#rrggbb"
-# strings, RGB tuples or cq.Color. Assemblies keep their part colors.
-show_object(part, name="body", options={"color": color})
+class Params(PrintSettings):
+    size: tuple[float, float] = Field((80, 50), description="Outer width and depth in mm")
+    debug: bool = Field(False, json_schema_extra={"hidden": True})
+    # A nested model becomes a customizer tab
+    lid: Lid = Field(Lid(), title="Lid")
+
+
+def build(p: Params) -> cq.Assembly:
+    ...
+
+
+if __name__ == "__main__":
+    # Local development: run it with `uv run python enclosure.py`, or use ocp_vscode
+    build(Params()).export("enclosure.step")
 ```
 
-If the script does not call `show_object`, a top-level `result` variable is shown instead.
+The Pydantic schema is mapped to the customizer:
 
-Local Python modules imported by the model (e.g. `from helpers import rounded_box`) and files loaded with `cq.importers.importStep("parts/bolt.step")` (and the other importers) are bundled automatically. Imports are resolved relative to the model's directory, which is also the working directory while the model runs.
+- `bool`, `int`, `float` and `str` fields become inputs. `ge`/`le`/`multiple_of` set the range and step, and `description` the help text.
+- `Literal[...]` fields become dropdowns. `json_schema_extra={"option-labels": {...}}` sets display names.
+- Fixed-length tuples of numbers, e.g. `tuple[float, float]`, become vector inputs.
+- A top-level field whose type is another model becomes a tab named after the field's `title`. Its parameters have dotted names like `lid.height`.
+- `json_schema_extra={"hidden": True}` hides a field.
 
-In addition to "Save STL", CadQuery models get a "Save STEP" button that exports the exact geometry with part names and colors. The first render takes a while because the Python runtime has to load; later renders reuse it and are much faster.
+Dotted names are used everywhere parameters are referenced: in `param-metadata` (wildcards like `"lid.*"` work), `umami-track-*`, and in JavaScript expressions, where they are nested objects:
+
+```toml
+[model.tab-metadata."Lid"]
+control-boolean = "lid.show"
+
+[model.param-metadata."lid.*"]
+display-condition = {js = "lid.show"}
+
+[model.param-metadata."lid.show"]
+display-condition = {fixed = false}
+```
+
+`additional-params` and `additional-params-scad` are not supported for CadQuery models. Share parameters by importing a common Pydantic model instead.
+
+Local modules imported by the model (e.g. `from helpers import rounded_box`) and files loaded with `cq.importers.importStep("parts/bolt.step")` (and the other importers) are bundled automatically. Imports are resolved relative to the model's directory, which is also the working directory while the model runs. At build time, the generator imports the models in the uv project's environment to read their parameters.
+
+In addition to "Save STL", CadQuery models get a "Save STEP" button that exports the exact geometry with part names and colors. The first render takes a while (about 15 seconds) because the Python runtime and OpenCascade have to load; later renders reuse them and are fast. Assembly constraint solving (`Assembly.solve()`) does not work in the browser, because Pyodide's casadi build lacks the IPOPT solver.
 
 ### Model Templates
 

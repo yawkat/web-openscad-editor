@@ -4,6 +4,7 @@
  */
 
 import { trackUmamiEvent } from "./analytics.js";
+import { compileExpression } from "./scope.js";
 
 // ── camera helper ────────────────────────────────────────────────────
 
@@ -78,9 +79,7 @@ function evaluateExportFileStem(exportFileStem, customization) {
     }
     if (exportFileStem.js != null) {
         try {
-            const expression = String(exportFileStem.js);
-            const evaluator = new Function(...Object.keys(customization), "return " + expression);
-            const evaluated = evaluator(...Object.values(customization));
+            const evaluated = compileExpression(String(exportFileStem.js), customization)(customization);
             return evaluated == null ? "" : String(evaluated);
         } catch (e) {
             console.warn("Failed to evaluate export-file-stem expression", e);

@@ -599,6 +599,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "datamodel-code-generator" },
     { name = "jinja2" },
+    { name = "packaging" },
     { name = "pydantic" },
 ]
 
@@ -611,6 +612,7 @@ dev = [
 requires-dist = [
     { name = "datamodel-code-generator", specifier = ">=0.53.0" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "packaging", specifier = ">=26.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 

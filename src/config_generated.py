@@ -92,9 +92,14 @@ class Cadquery(BaseModel):
         description='Angular tessellation tolerance (radians) used for the preview and STL export',
         gt=0.0,
     )
-    packages: list[str] | None = Field(
-        [],
-        description='Additional Python packages (pip requirement strings) installed with micropip in the browser before running models',
+    project: str | None = Field(
+        '.',
+        description='Directory of the uv project (pyproject.toml and uv.lock) that declares the dependencies of the CadQuery models, relative to the configuration file',
+    )
+    pyodide_version: str | None = Field(
+        '314.0.8',
+        alias='pyodide-version',
+        description='Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI.',
     )
 
 
@@ -180,7 +185,9 @@ class ModelConfig(BaseModel):
         description='Which runtime renders this model: OpenSCAD for .scad files, or CadQuery (Python, run in the browser with Pyodide). Defaults to openscad.',
     )
     additional_params: list[str] | None = Field(
-        [], alias='additional-params', description='Array of parameter JSON files'
+        [],
+        alias='additional-params',
+        description='Array of parameter JSON files (OpenSCAD runtime only)',
     )
     additional_params_scad: list[str] | None = Field(
         [],

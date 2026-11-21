@@ -5,7 +5,6 @@ import abc
 import os
 import pydantic
 
-import cadquery_params
 import config_generated
 
 ParamSet = typing.Sequence[typing.Mapping[str, typing.Any]]
@@ -20,8 +19,8 @@ class ParamsLoader(abc.ABC):
         pass
 
     def load_cadquery(self, declared_path: str) -> ParamSet:
-        with open(declared_path, "r", encoding="utf-8") as f:
-            return cadquery_params.extract_parameters(f.read(), declared_path)
+        """Parameters of a CadQuery model (see cadquery_schema.py)."""
+        raise NotImplementedError("This loader does not support CadQuery models")
 
     def load_and_merge(self, config: config_generated.ModelItem) -> ParamSet:
         combined = []
@@ -41,9 +40,10 @@ class ParamsLoader(abc.ABC):
                 add(p, origin)
 
         if model_runtime(config) == config_generated.Runtime.cadquery:
-            if config.additional_params_scad:
+            if config.additional_params or config.additional_params_scad:
                 raise RuntimeError(
-                    f"additional-params-scad is not supported for CadQuery models ('{config.file}'). Use additional-params instead."
+                    f"additional-params and additional-params-scad are not supported for CadQuery models ('{config.file}'). "
+                    "Share parameters by importing a common Pydantic model instead."
                 )
             add_all(self.load_cadquery(config.file), "own")
         else:

@@ -1,121 +1,135 @@
-"""Runs a CadQuery model inside the browser (Pyodide).
+"""Load and run CadQuery models.
 
-The generator embeds this file and ``cadquery_params.py`` into the CadQuery
-worker. The worker calls :func:`render` for every render request and
-:func:`export_step` when the user downloads a STEP file.
+A model is a plain Python module that defines ``build(params)``. The type
+annotation of the first parameter is a Pydantic model that declares the
+customizer parameters::
 
-Only :func:`execute_script` is independent of CadQuery, so it can be tested
-without a CadQuery installation.
+    class Params(BaseModel):
+        width: float = Field(10, ge=1, le=100)
+
+    def build(params: Params) -> cq.Workplane: ...
+
+This module is used in the browser (by the CadQuery worker) and at build time
+(by ``cadquery_extract.py``, in the user's own uv environment). Everything
+CadQuery-specific is imported inside functions, so loading a model and its
+parameters does not need more than the model's own imports.
 """
 
-import ast
+import contextlib
+import importlib.util
+import inspect
 import os
 import sys
 import typing
 
-import cadquery_params
-
-DEFAULT_NAME = "part"
+DEFAULT_PART_NAME = "model"
 
 
-class ShownObject(typing.NamedTuple):
-    obj: typing.Any
-    name: str | None
-    options: dict
+class ModelError(RuntimeError):
+    pass
 
 
-def execute_script(
-    path: str, params: typing.Mapping[str, typing.Any]
-) -> list[ShownObject]:
-    """Execute the script at ``path`` with the given parameter values.
+_modules: dict[str, typing.Any] = {}
 
-    Returns the objects passed to ``show_object``. If the script does not call
-    ``show_object``, a top-level ``result`` variable is used instead.
-    """
-    with open(path, "r", encoding="utf-8") as f:
-        source = f.read()
-    tree = cadquery_params.override_parameters(ast.parse(source, path), params)
-    code = compile(tree, path, "exec")
 
-    shown: list[ShownObject] = []
-
-    def show_object(obj, name=None, options=None, **kwargs):
-        # cqgi's signature is show_object(shape, options), CQ-editor's is
-        # show_object(obj, name, options). Accept both.
-        if isinstance(name, dict) and options is None:
-            name, options = None, name
-        merged = dict(options or {})
-        merged.update(kwargs)
-        if name is None:
-            name = merged.pop("name", None)
-        shown.append(ShownObject(obj, None if name is None else str(name), merged))
-
-    def noop(*args, **kwargs):
-        pass
-
-    env: dict[str, typing.Any] = {
-        "__name__": "__cqgi__",
-        "__file__": path,
-        "show_object": show_object,
-        "debug": noop,
-        "describe_parameter": noop,
-        "log": print,
-    }
-    # Parameters that are not assigned in the script itself (e.g. from
-    # additional-params) are made available as globals.
-    env.update(params)
-
+@contextlib.contextmanager
+def model_directory(path: str):
+    """Run with the model's directory as working directory and import root."""
     model_dir = os.path.dirname(os.path.abspath(path))
     if model_dir not in sys.path:
         sys.path.insert(0, model_dir)
-    previous_cwd = os.getcwd()
+    previous = os.getcwd()
     os.chdir(model_dir)
     try:
-        exec(code, env)
+        yield
     finally:
-        os.chdir(previous_cwd)
+        os.chdir(previous)
 
-    if not shown and "result" in env:
-        show_object(env["result"])
-    if not shown:
-        raise RuntimeError(
-            "The model did not produce any output. Call show_object(...) or assign "
-            "the final shape to a variable named 'result'."
+
+def load_model(path: str):
+    """Import a model file once and return the module."""
+    path = os.path.abspath(path)
+    module = _modules.get(path)
+    if module is not None:
+        return module
+    name = "wose_model_" + os.path.splitext(os.path.basename(path))[0]
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ModelError(f"Cannot load model {path}")
+    module = importlib.util.module_from_spec(spec)
+    with model_directory(path):
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    _modules[path] = module
+    return module
+
+
+def params_class(module) -> type:
+    """The Pydantic model annotated on the first parameter of ``build``."""
+    build = getattr(module, "build", None)
+    if not callable(build):
+        raise ModelError(f"{module.__file__} must define a function build(params)")
+    parameters = list(inspect.signature(build).parameters.values())
+    if not parameters:
+        raise ModelError("build() must take the parameters object as its first argument")
+    hints = typing.get_type_hints(build)
+    cls = hints.get(parameters[0].name)
+    if not (
+        isinstance(cls, type)
+        and hasattr(cls, "model_validate")
+        and hasattr(cls, "model_json_schema")
+    ):
+        raise ModelError(
+            f"The first parameter of build() must be annotated with a Pydantic model, "
+            f"e.g. `def build(params: Params)`, got {cls!r}"
         )
-    return shown
+    return cls
 
 
-# ── CadQuery-specific code ──────────────────────────────────────────────
+def nest(flat: typing.Mapping[str, typing.Any]) -> dict:
+    """Turn ``{"lid.height": 5}`` into ``{"lid": {"height": 5}}``."""
+    nested: dict[str, typing.Any] = {}
+    for key, value in flat.items():
+        target = nested
+        *parents, leaf = key.split(".")
+        for part in parents:
+            target = target.setdefault(part, {})
+        target[leaf] = value
+    return nested
 
-_last_shown: list[ShownObject] = []
+
+def validate_params(cls: type, flat_params: typing.Mapping[str, typing.Any]):
+    """Validate customizer values, turning validation errors into short messages."""
+    try:
+        return cls.model_validate(nest(flat_params))
+    except ValueError as e:
+        errors = getattr(e, "errors", None)
+        if not callable(errors):
+            raise
+        lines = [
+            f"{'.'.join(str(p) for p in error['loc'])}: {error['msg']}"
+            for error in errors()
+        ]
+        raise ModelError("Invalid parameters: " + "; ".join(lines)) from None
 
 
-def _to_color(value) -> tuple[float, float, float] | None:
-    import cadquery as cq
+def build_model(path: str, flat_params: typing.Mapping[str, typing.Any]):
+    module = load_model(path)
+    params = validate_params(params_class(module), flat_params)
+    with model_directory(path):
+        return module.build(params)
 
-    if value is None:
-        return None
-    if isinstance(value, cq.Color):
-        r, g, b, _ = value.toTuple()
-        return (r, g, b)
-    if isinstance(value, str):
-        text = value.strip()
-        if text.startswith("#") and len(text) in (4, 7, 9):
-            if len(text) == 4:
-                text = "#" + "".join(c * 2 for c in text[1:])
-            return tuple(int(text[i : i + 2], 16) / 255 for i in (1, 3, 5))
-        r, g, b, _ = cq.Color(text).toTuple()
-        return (r, g, b)
-    if isinstance(value, (list, tuple)) and len(value) >= 3:
-        rgb = [float(v) for v in value[:3]]
-        if any(v > 1 for v in rgb):
-            rgb = [v / 255 for v in rgb]
-        return (rgb[0], rgb[1], rgb[2])
-    raise ValueError(f"Unsupported color: {value!r}")
+
+# ── browser-only (CadQuery) ─────────────────────────────────────────────
+
+_last_result: typing.Any = None
 
 
 def _to_shape(obj):
-    """Convert a show_object argument into a single CadQuery Shape (or None)."""
     import cadquery as cq
 
     if isinstance(obj, cq.Shape):
@@ -133,96 +147,80 @@ def _to_shape(obj):
     if hasattr(obj, "wrapped"):
         # Other OCP-backed objects, e.g. build123d shapes
         return cq.Shape.cast(obj.wrapped)
-    raise TypeError(f"Cannot display object of type {type(obj).__name__}")
+    raise ModelError(
+        f"build() returned {type(obj).__name__}; expected a Workplane, Shape, Sketch or Assembly"
+    )
 
 
-def _parts(shown: list[ShownObject]):
-    """Yield ``(name, shape, color)`` for everything that should be displayed."""
+def _parts(result):
+    """Yield ``(name, shape, (r, g, b) or None)`` for the build result."""
     import cadquery as cq
 
-    for index, item in enumerate(shown):
-        color = _to_color(item.options.get("color"))
-        if isinstance(item.obj, cq.Assembly):
-            for shape, name, loc, assy_color in item.obj:
-                part_color = color
-                if assy_color is not None:
-                    r, g, b, _ = assy_color.toTuple()
-                    part_color = (r, g, b)
-                yield name, shape.moved(loc), part_color
-            continue
-        shape = _to_shape(item.obj)
-        if shape is not None:
-            yield item.name or f"{DEFAULT_NAME}{index + 1}", shape, color
+    if isinstance(result, cq.Assembly):
+        for shape, name, loc, color in result:
+            rgb = None
+            if color is not None:
+                r, g, b, _ = color.toTuple()
+                rgb = (r, g, b)
+            yield name, shape.moved(loc), rgb
+        return
+    shape = _to_shape(result)
+    if shape is not None:
+        yield DEFAULT_PART_NAME, shape, None
 
 
-def render(path: str, params: typing.Mapping[str, typing.Any], tolerance: float, angular_tolerance: float):
+def render(
+    path: str,
+    flat_params: typing.Mapping[str, typing.Any],
+    tolerance: float,
+    angular_tolerance: float,
+):
     """Run the model and tessellate the result.
 
-    Returns a list of ``{"name", "color", "positions"}`` dicts, where
-    ``positions`` is a little-endian float32 buffer of non-indexed triangle
-    vertices.
+    Returns ``{"parts": [...]}`` where each part is ``{"name", "color",
+    "positions"}`` and ``positions`` is a little-endian float32 buffer of
+    non-indexed triangle vertices. Returns ``{"missing": [...]}`` instead if
+    the model needs Pyodide packages that are not loaded yet.
     """
+    import lazy_imports
     import numpy as np
 
-    global _last_shown
-    _last_shown = []
-    shown = execute_script(path, params)
-    _last_shown = shown
-
-    meshes = []
-    for name, shape, color in _parts(shown):
-        vertices, triangles = shape.tessellate(tolerance, angular_tolerance)
-        if not triangles:
-            continue
-        vertex_array = np.array([v.toTuple() for v in vertices], dtype="<f4")
-        index_array = np.array(triangles, dtype=np.int64)
-        positions = vertex_array[index_array].reshape(-1)
-        meshes.append(
-            {
-                "name": name,
-                "color": None if color is None else list(color),
-                "positions": positions.tobytes(),
-            }
-        )
+    global _last_result
+    _last_result = None
+    try:
+        result = build_model(path, flat_params)
+        meshes = []
+        for name, shape, color in _parts(result):
+            vertices, triangles = shape.tessellate(tolerance, angular_tolerance)
+            if not triangles:
+                continue
+            vertex_array = np.array([v.toTuple() for v in vertices], dtype="<f4")
+            positions = vertex_array[np.array(triangles, dtype=np.int64)].reshape(-1)
+            meshes.append(
+                {
+                    "name": name,
+                    "color": None if color is None else list(color),
+                    "positions": positions.tobytes(),
+                }
+            )
+    except lazy_imports.MissingPackages as e:
+        return {"missing": e.packages}
     if not meshes:
-        raise RuntimeError("The model output does not contain any faces to display.")
-    return meshes
+        raise ModelError("The model output does not contain any faces to display.")
+    _last_result = result
+    return {"parts": meshes}
 
 
 def export_step(output_path: str) -> None:
-    """Export the result of the last :func:`render` call as a STEP file."""
+    """Export the result of the last successful :func:`render` as STEP."""
     import cadquery as cq
 
-    if not _last_shown:
-        raise RuntimeError("Nothing has been rendered yet.")
-    if len(_last_shown) == 1 and isinstance(_last_shown[0].obj, cq.Assembly):
-        # Keep the model's own assembly structure.
-        _last_shown[0].obj.export(output_path, "STEP")
+    if _last_result is None:
+        raise ModelError("Nothing has been rendered yet.")
+    if isinstance(_last_result, cq.Assembly):
+        _last_result.export(output_path, "STEP")
         return
-    assembly = cq.Assembly(name="model")
-    used_names: set[str] = set()
-    for index, item in enumerate(_last_shown):
-        base = item.name
-        if base is None and isinstance(item.obj, cq.Assembly):
-            base = item.obj.name
-        if base is None:
-            base = f"{DEFAULT_NAME}{index + 1}"
-        name = base
-        counter = 2
-        while name in used_names:
-            name = f"{base}_{counter}"
-            counter += 1
-        used_names.add(name)
-        if isinstance(item.obj, cq.Assembly):
-            assembly.add(item.obj, name=name)
-            continue
-        shape = _to_shape(item.obj)
-        if shape is None:
-            continue
-        color = _to_color(item.options.get("color"))
-        assembly.add(
-            shape,
-            name=name,
-            color=None if color is None else cq.Color(*color),
-        )
-    assembly.export(output_path, "STEP")
+    shape = _to_shape(_last_result)
+    cq.Assembly(name=DEFAULT_PART_NAME).add(shape, name=DEFAULT_PART_NAME).export(
+        output_path, "STEP"
+    )

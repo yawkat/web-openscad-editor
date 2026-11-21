@@ -1,6 +1,7 @@
-import {loadPyodide} from "https://cdn.jsdelivr.net/pyodide/v{{ cadquery_lock['pyodide-version'] }}/full/pyodide.mjs"
+import {loadPyodide} from "https://cdn.jsdelivr.net/pyodide/v{{ pyodide_version }}/full/pyodide.mjs"
 import {offMeshToBinaryStl} from "./{{ static_dir }}/editor/off.js"
 import {meshToGlb} from "./{{ static_dir }}/editor/glb.js"
+import {readZip} from "./{{ static_dir }}/editor/zip.js"
 import {formatErrorForMessage, getLog, logError, logInfo, resetLog} from "./{{ static_dir }}/editor/workerLog.js"
 
 console.log("CadQuery worker started")
@@ -8,12 +9,14 @@ console.log("CadQuery worker started")
 // Model files are written below this directory in the Python file system, so
 // they can't collide with Pyodide's own directories (e.g. /lib).
 const MODEL_ROOT = "/model"
-const SUPPORT_ROOT = "/wose"
-const PYODIDE_PACKAGES = {{ cadquery_lock['pyodide-packages'] | json_dump }}
-const MOCK_PACKAGES = {{ cadquery_lock['mock-packages'] | json_dump }}
-const WHEELS = {{ cadquery_wheels | json_dump }}
-const EXTRA_PACKAGES = {{ (config.cadquery.packages or []) | json_dump }}
-const PYTHON_SOURCES = {{ cadquery_python_sources | json_dump }}
+// Pyodide packages loaded during startup, and ones loaded only when a model needs them
+const PYODIDE_PACKAGES = {{ pyodide_packages | json_dump }}
+const DEFERRED_PACKAGES = {{ deferred_packages | json_dump }}
+// Bundled modules that are imported on first use
+const DEFERRED_INSTALLED_MODULES = {{ deferred_installed_modules | json_dump }}
+// OCP.wasm (OpenCascade) wheel, and the precompiled pure-Python packages
+const OCP_WHEEL_URL = new URL({{ ocp_wheel_url | json_dump }}, self.location.href).href
+const SITE_PACKAGES_URL = new URL({{ site_packages_url | json_dump }}, self.location.href).href
 const TOLERANCE = {{ config.cadquery.tolerance | json_dump }}
 const ANGULAR_TOLERANCE = {{ config.cadquery.angular_tolerance | json_dump }}
 // Used for parts without a color when other parts have one (OpenSCAD's default).
@@ -27,6 +30,7 @@ INPUT_FILES.set({{ virtual_path | json_dump }}, `./{{ fs_cas_dir }}/{{ digest }}
 let runQueue = Promise.resolve()
 let runtimePromise = null
 let runtimeReady = false
+let deferredPackagesLoaded = false
 
 function progress(message) {
     logInfo(message)
@@ -41,6 +45,10 @@ async function fetchBytes(url) {
     return new Uint8Array(await r.arrayBuffer())
 }
 
+async function fetchZip(url) {
+    return readZip(await fetchBytes(url))
+}
+
 function writeFile(pyodide, path, data) {
     const parent = path.substring(0, path.lastIndexOf("/"))
     if (parent) {
@@ -49,49 +57,78 @@ function writeFile(pyodide, path, data) {
     pyodide.FS.writeFile(path, data)
 }
 
+/** Run a load step and log how long it took. */
+async function timed(label, fn) {
+    const start = performance.now()
+    const result = await fn()
+    logInfo(`[load] ${label}: ${((performance.now() - start) / 1000).toFixed(2)}s`)
+    return result
+}
+
 async function initRuntime() {
+    const start = performance.now()
     progress("Loading Python runtime…")
+    // Downloads and unzipping run in parallel with Pyodide's startup.
+    const ocpPromise = timed("download and unzip OCP", () => fetchZip(OCP_WHEEL_URL))
+    const sitePromise = timed("download and unzip site-packages", () => fetchZip(SITE_PACKAGES_URL))
     const inputFilesPromise = Promise.all(
         Array.from(INPUT_FILES.entries()).map(async ([path, url]) => [path, await fetchBytes(url)]),
     )
-    const pyodide = await loadPyodide({ stdout: logInfo, stderr: logInfo })
+    // Pyodide's own packages are loaded before OCP: loading other native
+    // libraries after OCP's large one is much slower.
+    const pyodide = await timed("Pyodide and packages", () => loadPyodide({
+        packages: PYODIDE_PACKAGES,
+        stdout: logInfo,
+        stderr: logInfo,
+    }))
+    const sitePackages = pyodide.runPython("import sysconfig; sysconfig.get_paths()['purelib']")
 
-    progress("Loading Python packages…")
-    await pyodide.loadPackage(PYODIDE_PACKAGES, { messageCallback: logInfo, errorCallback: logError })
-
-    progress("Installing CadQuery…")
-    const micropip = pyodide.pyimport("micropip")
-    // Packages that CadQuery declares as dependencies but that are either
-    // provided by OCP.wasm under another name or not needed in the browser.
-    for (const [name, version] of Object.entries(MOCK_PACKAGES)) {
-        micropip.add_mock_package(name, version)
+    progress("Loading OpenCascade…")
+    let ocpLibrary = null
+    for (const entry of await ocpPromise) {
+        const path = `${sitePackages}/${entry.name}`
+        writeFile(pyodide, path, entry.data)
+        if (entry.name.endsWith(".so")) {
+            ocpLibrary = path
+        }
     }
-    const wheelUrls = WHEELS.map((w) => new URL(w, self.location.href).href)
-    await micropip.install.callKwargs(wheelUrls, { deps: false })
-    if (EXTRA_PACKAGES.length > 0) {
-        progress("Installing additional packages…")
-        await micropip.install(EXTRA_PACKAGES)
+    if (ocpLibrary && pyodide._api && pyodide._api.loadDynlib) {
+        // Load the library asynchronously. Without this, `import OCP` loads it
+        // synchronously, which works too but blocks longer.
+        await timed("link OCP", () => pyodide._api.loadDynlib(ocpLibrary, true))
     }
-    micropip.destroy()
+    progress("Initializing OpenCascade…")
+    await timed("import OCP", () => pyodide.runPython("import OCP"))
 
-    for (const [name, source] of Object.entries(PYTHON_SOURCES)) {
-        writeFile(pyodide, `${SUPPORT_ROOT}/${name}`, source)
+    for (const entry of await sitePromise) {
+        writeFile(pyodide, `${sitePackages}/${entry.name}`, entry.data)
     }
     for (const [path, bytes] of await inputFilesPromise) {
         writeFile(pyodide, MODEL_ROOT + path, bytes)
     }
 
     progress("Loading CadQuery…")
-    pyodide.runPython(`
-import sys
-sys.path.insert(0, ${JSON.stringify(SUPPORT_ROOT)})
-import cadquery_stubs
-cadquery_stubs.install()
+    await timed("import cadquery", () => pyodide.runPython(`
+import lazy_imports
+lazy_imports.install(
+    deferred_installed=${JSON.stringify(DEFERRED_INSTALLED_MODULES)},
+    deferred_packages=${JSON.stringify(DEFERRED_PACKAGES)},
+)
+lazy_imports.install_ocp_stubs()
 import cadquery
-`)
+`))
     const runner = pyodide.pyimport("cadquery_runner")
+    logInfo(`[load] total: ${((performance.now() - start) / 1000).toFixed(2)}s`)
     runtimeReady = true
     return { pyodide, runner }
+}
+
+async function loadDeferredPackages(pyodide, packages) {
+    progress(`Loading ${packages.join(", ")}…`)
+    await timed(`load ${packages.join(", ")}`, () =>
+        pyodide.loadPackage(DEFERRED_PACKAGES, { messageCallback: logInfo, errorCallback: logError }))
+    pyodide.runPython("import importlib; importlib.invalidate_caches()")
+    deferredPackagesLoaded = true
 }
 
 async function getRuntime() {
@@ -162,22 +199,34 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
     logInfo("Parameters:", params)
     progress("Rendering…")
 
-    const pyParams = pyodide.toPy(params)
-    let result
-    try {
-        result = runner.render(MODEL_ROOT + input, pyParams, TOLERANCE, ANGULAR_TOLERANCE)
-    } finally {
-        pyParams.destroy()
-    }
-    let parts
-    try {
-        parts = result.toJs({ dict_converter: Object.fromEntries }).map((part) => ({
-            name: part.name,
-            color: part.color,
-            positions: bytesToFloat32(part.positions),
-        }))
-    } finally {
-        result.destroy()
+    let parts = null
+    for (let attempt = 0; parts === null; attempt++) {
+        const pyParams = pyodide.toPy(params)
+        let result
+        try {
+            result = runner.render(MODEL_ROOT + input, pyParams, TOLERANCE, ANGULAR_TOLERANCE)
+        } finally {
+            pyParams.destroy()
+        }
+        try {
+            const converted = result.toJs({ dict_converter: Object.fromEntries })
+            if (converted.missing) {
+                // The model needs packages that are only loaded on demand.
+                if (deferredPackagesLoaded || attempt > 0) {
+                    throw new Error(`Packages could not be loaded: ${converted.missing.join(", ")}`)
+                }
+                await loadDeferredPackages(pyodide, converted.missing)
+                progress("Rendering…")
+                continue
+            }
+            parts = converted.parts.map((part) => ({
+                name: part.name,
+                color: part.color,
+                positions: bytesToFloat32(part.positions),
+            }))
+        } finally {
+            result.destroy()
+        }
     }
     logInfo("Parts:", parts.map((p) => `${p.name} (${p.positions.length / 9} triangles)`).join(", "))
 

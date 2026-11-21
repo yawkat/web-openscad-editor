@@ -181,34 +181,41 @@ class CadqueryParamsLoader(MockParamsLoader):
     def load_scad(self, declared_path: str) -> model.ParamSet:
         raise AssertionError("OpenSCAD should not be used for CadQuery models")
 
+    def load_cadquery(self, declared_path: str) -> model.ParamSet:
+        return self.sets[declared_path]
 
-def test_cadquery_runtime(tmp_path):
-    model_file = tmp_path / "bracket.py"
-    model_file.write_text("# [Size]\nwidth = 10\n")
+
+def test_cadquery_runtime():
     ctx = model.ScadContext(
         config_generated.ModelItem.model_validate({
-            "file": str(model_file),
+            "file": "bracket.py",
             "runtime": "cadquery",
+            "param-metadata": {"lid.*": {"help-link": "https://example.com"}},
         }),
-        CadqueryParamsLoader({}),
+        CadqueryParamsLoader({"bracket.py": [
+            {"name": "width", "type": "number", "initial": 10, "group": "Parameters"},
+            {"name": "lid.height", "type": "number", "initial": 5, "group": "Lid"},
+        ]}),
     )
     assert ctx.runtime == config_generated.Runtime.cadquery
     assert ctx.name() == "bracket"
-    assert [p.name for p in ctx.params] == ["width"]
-    assert ctx.params[0].group.name == "Size"
+    assert [p.name for p in ctx.params] == ["width", "lid.height"]
+    assert ctx.params[1].group.name == "Lid"
+    # Wildcards match dotted names
+    assert ctx.params[1].metadata.help_link == "https://example.com"
+    assert ctx.params[0].metadata.help_link is None
 
 
-def test_cadquery_rejects_additional_params_scad(tmp_path):
-    model_file = tmp_path / "bracket.py"
-    model_file.write_text("width = 10\n")
-    with pytest.raises(RuntimeError, match="additional-params-scad"):
+@pytest.mark.parametrize("option", ["additional-params", "additional-params-scad"])
+def test_cadquery_rejects_additional_params(option):
+    with pytest.raises(RuntimeError, match="not supported for CadQuery"):
         model.ScadContext(
             config_generated.ModelItem.model_validate({
-                "file": str(model_file),
+                "file": "bracket.py",
                 "runtime": "cadquery",
-                "additional-params-scad": ["params.scad"],
+                option: ["params"],
             }),
-            CadqueryParamsLoader({}),
+            CadqueryParamsLoader({"bracket.py": []}),
         )
 
 

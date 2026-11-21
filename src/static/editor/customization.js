@@ -8,6 +8,8 @@
  * refresh, auto-render trigger) happen consistently.
  */
 
+import { compileExpression } from "./scope.js";
+
 const DEBUG_CUSTOMIZATION_HASH = false;
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -55,7 +57,7 @@ export function createCustomizationController({ defaultCustomization, additional
         const js = elem.dataset.displayCondition;
         conditionalElements.push({
             element: elem,
-            predicate: new Function(...Object.keys(currentCustomization), "return " + js),
+            predicate: compileExpression(js, currentCustomization),
         });
     }
 
@@ -131,7 +133,7 @@ export function createCustomizationController({ defaultCustomization, additional
             }
         }
         for (const elem of conditionalElements) {
-            elem.element.style.display = elem.predicate(...Object.values(currentCustomization)) ? "" : "none";
+            elem.element.style.display = elem.predicate(currentCustomization) ? "" : "none";
         }
     }
 

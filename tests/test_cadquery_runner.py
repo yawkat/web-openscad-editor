@@ -4,55 +4,70 @@ import pytest
 
 import cadquery_runner
 
+MODEL = """
+from pydantic import BaseModel, Field
 
-def write_model(tmp_path, source: str, name: str = "model.py"):
+
+class Lid(BaseModel):
+    show: bool = True
+    height: float = Field(6, ge=2, le=20)
+
+
+class Params(BaseModel):
+    width: float = 10
+    size: tuple[float, float] = (1, 2)
+    lid: Lid = Lid()
+
+
+def build(p: Params):
+    with open("data.txt") as f:
+        data = f.read()
+    return (p.width, p.size, p.lid.show, p.lid.height, data)
+"""
+
+
+def write_model(tmp_path, source: str, name: str):
     path = tmp_path / name
     path.write_text(textwrap.dedent(source))
+    (tmp_path / "data.txt").write_text("hello")
     return str(path)
 
 
-def test_show_object_and_parameter_override(tmp_path):
-    path = write_model(
-        tmp_path,
-        """
-        width = 10
-        show_object(width * 2, name="double", options={"color": "red"})
-        show_object(width, options={"name": "plain"})
-        show_object(extra)
-        show_object("cqgi", {"color": "blue", "name": "positional"})
-        """,
+def test_build_model_with_nested_params(tmp_path):
+    path = write_model(tmp_path, MODEL, "runner_model_a.py")
+    result = cadquery_runner.build_model(
+        path, {"width": 3, "size": [4, 5], "lid.show": False, "lid.height": 7}
     )
-    shown = cadquery_runner.execute_script(path, {"width": 3, "extra": "from-additional"})
-    assert [(s.obj, s.name, s.options) for s in shown] == [
-        (6, "double", {"color": "red"}),
-        (3, "plain", {}),
-        ("from-additional", None, {}),
-        ("cqgi", "positional", {"color": "blue"}),
-    ]
+    # Lists from the browser are validated into tuples; the working directory
+    # is the model's directory.
+    assert result == (3, (4, 5), False, 7, "hello")
 
 
-def test_result_fallback(tmp_path):
-    path = write_model(tmp_path, "result = 42\n")
-    shown = cadquery_runner.execute_script(path, {})
-    assert [s.obj for s in shown] == [42]
+def test_defaults_for_missing_values(tmp_path):
+    path = write_model(tmp_path, MODEL, "runner_model_b.py")
+    assert cadquery_runner.build_model(path, {}) == (10, (1, 2), True, 6, "hello")
 
 
-def test_no_output(tmp_path):
-    path = write_model(tmp_path, "x = 1\n")
-    with pytest.raises(RuntimeError, match="show_object"):
-        cadquery_runner.execute_script(path, {})
+def test_validation_error_message(tmp_path):
+    path = write_model(tmp_path, MODEL, "runner_model_c.py")
+    with pytest.raises(cadquery_runner.ModelError, match=r"lid\.height: Input should be less than or equal to 20"):
+        cadquery_runner.build_model(path, {"lid.height": 99})
 
 
-def test_local_imports_and_working_directory(tmp_path):
-    (tmp_path / "helper_mod_for_runner_test.py").write_text("VALUE = 5\n")
-    (tmp_path / "data.txt").write_text("hello")
-    path = write_model(
-        tmp_path,
-        """
-        from helper_mod_for_runner_test import VALUE
-        with open("data.txt") as f:
-            show_object((VALUE, f.read()))
-        """,
-    )
-    shown = cadquery_runner.execute_script(path, {})
-    assert shown[0].obj == (5, "hello")
+def test_params_class_requires_annotated_build(tmp_path):
+    path = write_model(tmp_path, "def build(p):\n    return 1\n", "runner_model_d.py")
+    with pytest.raises(cadquery_runner.ModelError, match="Pydantic model"):
+        cadquery_runner.params_class(cadquery_runner.load_model(path))
+
+
+def test_params_class_requires_build(tmp_path):
+    path = write_model(tmp_path, "x = 1\n", "runner_model_e.py")
+    with pytest.raises(cadquery_runner.ModelError, match="must define a function build"):
+        cadquery_runner.params_class(cadquery_runner.load_model(path))
+
+
+def test_nest():
+    assert cadquery_runner.nest({"a": 1, "b.c": 2, "b.d.e": 3}) == {
+        "a": 1,
+        "b": {"c": 2, "d": {"e": 3}},
+    }
