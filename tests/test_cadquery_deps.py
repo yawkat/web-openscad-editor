@@ -117,3 +117,14 @@ def test_marker_environment():
     env = cadquery_deps.marker_environment("3.14.2")
     assert env["sys_platform"] == "emscripten"
     assert env["python_version"] == "3.14"
+
+
+def test_custom_wheel():
+    wheel = cadquery_deps.custom_wheel(
+        "https://github.com/o/r/releases/download/v1/ocp-7.9.3.1%2Bcadquery2.8.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "AB" * 32,
+    )
+    assert wheel.filename == "ocp-7.9.3.1+cadquery2.8.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl"
+    assert wheel.sha256 == "ab" * 32
+    with pytest.raises(cadquery_deps.DependencyError):
+        cadquery_deps.custom_wheel("https://example.com/ocp.zip", "ab" * 32)

@@ -77,6 +77,16 @@ class Openscad(BaseModel):
     )
 
 
+class OcpWheel(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    url: str = Field(..., description='URL of the wheel')
+    sha256: str = Field(
+        ..., description='SHA256 checksum of the wheel', pattern='^[0-9a-fA-F]{64}$'
+    )
+
+
 class Cadquery(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -100,6 +110,11 @@ class Cadquery(BaseModel):
         '314.0.8',
         alias='pyodide-version',
         description='Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI.',
+    )
+    ocp_wheel: OcpWheel | None = Field(
+        None,
+        alias='ocp-wheel',
+        description='Use this OCP.wasm wheel instead of the matching cadquery-ocp-novtk-OCP.wasm release from PyPI, e.g. a smaller CadQuery-only build',
     )
 
 

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import typing
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -157,12 +158,21 @@ def build_site_packages(
 
 
 def prepare_runtime(
-    project_dir: str, pyodide_version: str, output_dir: str, output_subdir: str
+    project_dir: str,
+    pyodide_version: str,
+    output_dir: str,
+    output_subdir: str,
+    ocp_wheel: cadquery_deps.Wheel | None = None,
 ) -> dict[str, typing.Any]:
-    """Resolve and bundle the browser runtime; return worker template variables."""
+    """Resolve and bundle the browser runtime; return worker template variables.
+
+    ``ocp_wheel`` replaces the OCP.wasm release from PyPI.
+    """
     pyodide_lock = load_pyodide_lock(pyodide_version)
     python_version = pyodide_lock["info"]["python"]
-    packages = cadquery_deps.resolve_from_project(project_dir, pyodide_lock, pyodide_version)
+    packages = cadquery_deps.resolve_from_project(
+        project_dir, pyodide_lock, pyodide_version, ocp_wheel
+    )
     for warning in packages.warnings:
         print("Note:", warning)
 
@@ -172,7 +182,8 @@ def prepare_runtime(
     os.makedirs(target)
 
     ocp = packages.ocp_wheel
-    ocp_cached = os.path.join(CACHE_DIR, ocp.filename)
+    # Keyed by checksum: custom builds may reuse a file name.
+    ocp_cached = os.path.join(CACHE_DIR, "ocp", ocp.sha256, ocp.filename)
     _download(ocp_cached, ocp.url, ocp.sha256)
     shutil.copyfile(ocp_cached, os.path.join(target, ocp.filename))
 
@@ -189,6 +200,6 @@ def prepare_runtime(
         "deferred_installed_modules": [
             m for m in DEFERRED_INSTALLED_MODULES if m.split(".")[0] in bundled
         ],
-        "ocp_wheel_url": f"{output_subdir}/{ocp.filename}",
+        "ocp_wheel_url": f"{output_subdir}/{urllib.parse.quote(ocp.filename)}",
         "site_packages_url": f"{output_subdir}/{site_name}",
     }

@@ -12,6 +12,7 @@ import hashlib
 import tomllib
 
 import cadquery_build
+import cadquery_deps
 import cadquery_schema
 import model
 import config_generated
@@ -275,11 +276,15 @@ def main():
             },
         )
     if uses_cadquery:
+        ocp_wheel = config.cadquery.ocp_wheel
         runtime_variables = cadquery_build.prepare_runtime(
             cadquery_project,
             config.cadquery.pyodide_version or "314.0.8",
             args.output,
             "cadquery",
+            None
+            if ocp_wheel is None
+            else cadquery_deps.custom_wheel(ocp_wheel.url, ocp_wheel.sha256),
         )
         worker_script_names[config_generated.Runtime.cadquery] = write_worker(
             j2env,

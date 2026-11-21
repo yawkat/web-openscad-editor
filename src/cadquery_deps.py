@@ -16,6 +16,7 @@ import re
 import subprocess
 import tomllib
 import typing
+import urllib.parse
 import urllib.request
 
 from packaging.markers import Marker
@@ -260,14 +261,32 @@ def python_tag(python_version: str) -> str:
     return f"cp{major}{minor}"
 
 
+def custom_wheel(url: str, sha256: str) -> Wheel:
+    """A wheel given by URL, e.g. a custom OCP.wasm build."""
+    filename = urllib.parse.unquote(url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1])
+    if not filename.endswith(".whl"):
+        raise DependencyError(f"{url} does not look like a wheel (expected a .whl file name)")
+    return Wheel(filename, url, sha256.lower())
+
+
 def resolve_from_project(
-    project_dir: str, pyodide_lock: typing.Mapping[str, typing.Any], pyodide_version: str
+    project_dir: str,
+    pyodide_lock: typing.Mapping[str, typing.Any],
+    pyodide_version: str,
+    ocp_wheel: Wheel | None = None,
 ) -> BrowserPackages:
+    """Resolve the browser packages of a uv project.
+
+    ``ocp_wheel`` replaces the OCP.wasm release from PyPI, e.g. with a smaller
+    CadQuery-only build.
+    """
     info = pyodide_lock["info"]
     tag = python_tag(info["python"])
     pypi_cache: dict[str, typing.Any] = {}
 
     def ocp_lookup(version: str) -> Wheel:
+        if ocp_wheel is not None:
+            return ocp_wheel
         if "json" not in pypi_cache:
             pypi_cache["json"] = _fetch_json(
                 f"https://pypi.org/pypi/{OCP_WASM_PACKAGE}/json"

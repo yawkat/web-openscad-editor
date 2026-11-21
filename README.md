@@ -113,6 +113,9 @@ project = "models"
 # Pyodide version that runs the models in the browser. The OCP.wasm build of OpenCascade
 # must be available for its ABI, so only change this together with cadquery-ocp.
 pyodide-version = "314.0.8"
+# Optional: use this OCP.wasm (OpenCascade) wheel instead of the matching release from PyPI,
+# e.g. a smaller build that only contains what CadQuery needs, which loads and renders faster.
+ocp-wheel = { url = "https://github.com/yawkat/ocp-wasm-cadquery/releases/download/...", sha256 = "..." }
 # Tessellation tolerances used for the preview and the STL export. Smaller values give
 # smoother curves but larger files. The linear tolerance is in mm, the angular one in radians.
 tolerance = 0.1
