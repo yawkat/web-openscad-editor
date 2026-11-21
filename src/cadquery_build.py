@@ -16,9 +16,15 @@ SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 # Python modules of this project that run in the browser
 RUNTIME_MODULES = ["cadquery_runner.py", "lazy_imports.py"]
 # Bundled modules that are imported at module level but rarely used. They are
-# imported on first use (see lazy_imports.py). pyparsing.testing pulls in
-# unittest and friends.
-DEFERRED_INSTALLED_MODULES = ["ezdxf", "pyparsing.testing"]
+# imported on first use (see lazy_imports.py). CadQuery's DXF modules import
+# ezdxf (slow to import); deferring them rather than ezdxf itself means only
+# functions and classes cross the lazy boundary, never ezdxf's constants.
+# pyparsing.testing pulls in unittest and friends.
+DEFERRED_INSTALLED_MODULES = [
+    "cadquery.occ_impl.exporters.dxf",
+    "cadquery.occ_impl.importers.dxf",
+    "pyparsing.testing",
+]
 CACHE_DIR = os.path.join("build", "cadquery")
 
 

@@ -135,6 +135,27 @@ class _LazyAttribute:
         return f"<lazy {self._module}.{'.'.join(self._path)}>"
 
 
+def _delegate(name):
+    def method(self, *args):
+        return getattr(self._resolve(), name)(*args)
+
+    method.__name__ = name
+    return method
+
+
+# Operators are looked up on the type, not via __getattr__, so values that were
+# imported before the module was loaded (e.g. constants used as default
+# arguments) need explicit delegation.
+for _name in (
+    "__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__", "__hash__",
+    "__bool__", "__int__", "__float__", "__index__", "__str__", "__len__",
+    "__iter__", "__contains__", "__getitem__", "__add__", "__sub__", "__mul__",
+    "__truediv__", "__or__", "__and__", "__radd__", "__rsub__", "__rmul__",
+    "__ror__", "__rand__", "__enter__", "__exit__",
+):
+    setattr(_LazyAttribute, _name, _delegate(_name))
+
+
 class _LazyModule(types.ModuleType):
     def __getattr__(self, name):
         if name.startswith("__") and name.endswith("__"):

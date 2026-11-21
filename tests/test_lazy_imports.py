@@ -70,3 +70,12 @@ def test_stub_module(hooks):
     assert f() == 1
     assert g() == 2
     Anything().whatever()
+
+
+def test_lazy_values_behave_like_values(hooks):
+    from wose_fake_installed.sub import VALUE
+
+    assert VALUE + 1 == 43
+    assert 40 <= VALUE
+    assert VALUE == 42
+    assert int(VALUE) == 42
