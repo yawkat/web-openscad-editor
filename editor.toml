@@ -6,9 +6,19 @@ commit = "fbcdfdd511b6abfde93c43c8f85c2bd24ee7a02d"
 
 [[model]]
 file = "test.scad"
+index = true
 preview-style = "colors"
 export-file-stem = {js = "shape + '-' + width + 'x' + depth + 'x' + height"}
 # Track render events with selected model parameters
 umami-track-render = ["shape", "width", "depth", "height"]
 # Track export events with additional parameters
 umami-track-export = ["shape", "width", "depth", "height", "rounding"]
+
+[[model]]
+file = "examples/cadquery/enclosure.py"
+runtime = "cadquery"
+preview-style = "colors"
+export-file-stem = {js = "'enclosure-' + size[0] + 'x' + size[1] + 'x' + height"}
+
+[model.param-metadata."lid_*"]
+display-condition = {js = "show_lid"}

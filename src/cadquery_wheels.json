@@ -1,0 +1,50 @@
+{
+  "_comment": "Pinned CadQuery runtime for the browser. The OCP wheel ABI (pyemscripten_2026_0, cp314) must match the Pyodide version.",
+  "pyodide-version": "314.0.8",
+  "pyodide-packages": [
+    "micropip",
+    "numpy",
+    "scipy",
+    "nlopt",
+    "casadi",
+    "pyparsing",
+    "typing-extensions",
+    "fonttools"
+  ],
+  "mock-packages": {
+    "cadquery-ocp": "7.9.3.1",
+    "trame": "0.0.0",
+    "trame-vtk": "0.0.0",
+    "trame-components": "0.0.0",
+    "trame-vuetify": "0.0.0",
+    "numba": "0.0.0",
+    "vtk": "0.0.0"
+  },
+  "wheels": [
+    {
+      "filename": "cadquery_ocp_novtk_ocp_wasm-7.9.3.1.post202609191800-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+      "url": "https://files.pythonhosted.org/packages/7e/0c/b3cd8223432500f4562c4153d4d150ccd9f9693fd2e99cd5936b669e25de/cadquery_ocp_novtk_ocp_wasm-7.9.3.1.post202609191800-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+      "sha256": "73bc4d5cea0dfe643f4b90b4d2e444690e8ea9652f9404aba33fa44889e27ce1"
+    },
+    {
+      "filename": "multimethod-1.12-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/af/98/cff14d53a2f2f67d7fe8a4e235a383ee71aba6a1da12aeea24b325d0c72a/multimethod-1.12-py3-none-any.whl",
+      "sha256": "fd0c473c43558908d97cc06e4d68e8f69202f167db46f7b4e4058893e7dbdf60"
+    },
+    {
+      "filename": "runtype-0.5.3-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/80/db/879902580d720925092c86eaab2ceee7493e2fadbb5b718f54289b04d277/runtype-0.5.3-py3-none-any.whl",
+      "sha256": "ea8cc6828217ebfda5c159dce969e832efd865a09d6ad1fc993f5bf5e1a627ee"
+    },
+    {
+      "filename": "ezdxf-1.4.5-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/fb/d7/9f420747a1edf562cabff228f8d1f7a16530ad021ea6f84c775ca15dec9b/ezdxf-1.4.5-py3-none-any.whl",
+      "sha256": "70a79ec7d40990f60453e3c87ffe9f668907ee061cf6f4c0a3794d032ec2b40e"
+    },
+    {
+      "filename": "cadquery-2.8.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/42/3c/57a6c1683576c9a626207399972c2e83420dc6f87c239446190021d649db/cadquery-2.8.0-py3-none-any.whl",
+      "sha256": "0acaddf36415551c26c3f8237907980ba86c277e211c32398121c839f719c81f"
+    }
+  ]
+}

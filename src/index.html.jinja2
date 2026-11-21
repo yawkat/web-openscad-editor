@@ -169,7 +169,8 @@
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
     <script>
         window.__WOSE_MODEL__ = {
-            workerUrl: "./{{ worker_script_name }}",
+            workerUrl: "./{{ ctx.worker_script_name }}",
+            modelRuntime: {{ ctx.runtime.value | json_dump }},
             defaultCustomization: {
                 {% for entry in ctx.params -%}
                     "{{ entry.name }}":
@@ -214,6 +215,11 @@
         </label>
         <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#profiles-modal">Profiles</button>
         <button id="download-stl" type="button" class="btn btn-primary">Save STL</button>
+        {% if ctx.runtime.value == "cadquery" %}
+        <button id="download-step" type="button" class="btn btn-primary" title="Save as STEP (exact CAD geometry, with part names and colors)">Save STEP<span id="download-step-state" class="d-none"> <span
+                class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></button>
+        {% endif %}
+        <div id="render-progress" class="small text-body-secondary mt-1 d-none" aria-live="polite"></div>
         <div id="render-error" class="alert alert-danger mt-2 d-none" role="alert">
             <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
                 <div>

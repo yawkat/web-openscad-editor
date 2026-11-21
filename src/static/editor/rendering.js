@@ -9,6 +9,10 @@ import { trackUmamiEvent } from "./analytics.js";
 
 function applyCameraFromSummary(camera, modelViewer) {
     if (!camera) {
+        // No camera information (e.g. CadQuery models): let model-viewer
+        // frame the model automatically.
+        modelViewer.removeAttribute("camera-orbit");
+        modelViewer.removeAttribute("camera-target");
         return;
     }
     const rotation = camera.rotation;
@@ -58,6 +62,49 @@ function showRenderError(dom, { summary, log }) {
     setRenderErrorVisible(dom, true);
 }
 
+function setProgress(dom, message) {
+    if (!dom.renderProgress) {
+        return;
+    }
+    dom.renderProgress.textContent = message || "";
+    dom.renderProgress.classList.toggle("d-none", !message);
+}
+
+// ── export file naming ───────────────────────────────────────────────
+
+function evaluateExportFileStem(exportFileStem, customization) {
+    if (exportFileStem === null) {
+        return "";
+    }
+    if (exportFileStem.js != null) {
+        try {
+            const expression = String(exportFileStem.js);
+            const evaluator = new Function(...Object.keys(customization), "return " + expression);
+            const evaluated = evaluator(...Object.values(customization));
+            return evaluated == null ? "" : String(evaluated);
+        } catch (e) {
+            console.warn("Failed to evaluate export-file-stem expression", e);
+            if (exportFileStem.fixed != null) {
+                return String(exportFileStem.fixed);
+            }
+            return "";
+        }
+    }
+    if (exportFileStem.fixed != null) {
+        return String(exportFileStem.fixed);
+    }
+    return "";
+}
+
+function downloadBytes(bytes, filename, mimeType) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
 // ── renderer factory ─────────────────────────────────────────────────
 
 /**
@@ -89,11 +136,29 @@ export function createRenderer({
     let isDirty = false;
     let lastResult = null;
     let isInitialRender = true;
+    let isExporting = false;
+
+    function setExporting(exporting) {
+        isExporting = exporting;
+        if (dom.downloadStepButton) {
+            dom.downloadStepButton.disabled = exporting || isRendering;
+        }
+        if (dom.downloadStepState) {
+            dom.downloadStepState.classList.toggle("d-none", !exporting);
+        }
+    }
+
+    function exportFilename(extension) {
+        return evaluateExportFileStem(exportFileStem, getCustomization()) + "." + extension;
+    }
 
     function setRendering(rendering) {
         isRendering = rendering;
         dom.renderButton.disabled = rendering;
         dom.downloadStlButton.disabled = rendering;
+        if (dom.downloadStepButton) {
+            dom.downloadStepButton.disabled = rendering || isExporting;
+        }
         if (rendering) {
             lastResult = null;
             dom.renderState.classList.remove("d-none");
@@ -103,6 +168,7 @@ export function createRenderer({
                 dom.modelLoadingOverlay.classList.remove("d-none");
             }
         } else {
+            setProgress(dom, "");
             dom.renderState.classList.add("d-none");
             dom.modelViewer.classList.remove("is-outdated");
             dom.modelViewer.setAttribute("aria-busy", "false");
@@ -124,6 +190,7 @@ export function createRenderer({
             summary: "Worker crashed while rendering",
             log: String(event && event.message ? event.message : event),
         });
+        setExporting(false);
         setRendering(false);
     });
 
@@ -133,11 +200,36 @@ export function createRenderer({
             summary: "Worker message error",
             log: String(event && event.message ? event.message : event),
         });
+        setExporting(false);
         setRendering(false);
     });
 
     worker.addEventListener("message", (event) => {
         if (!event.data || typeof event.data !== "object") {
+            return;
+        }
+        if (event.data.type === "progress") {
+            // The CadQuery runtime starts loading before the first render
+            // starts, so show progress regardless of the render state. It is
+            // cleared when the render finishes.
+            setProgress(dom, event.data.message);
+            return;
+        }
+        if (event.data.type === "export-ok") {
+            setExporting(false);
+            downloadBytes(event.data.bytes, exportFilename(event.data.format), "application/octet-stream");
+            if (umamiTrackExport !== null) {
+                trackUmamiEvent("export-" + event.data.format, umamiTrackExport, getCustomization());
+            }
+            return;
+        }
+        if (event.data.type === "export-error") {
+            setExporting(false);
+            console.error("Export error", event.data);
+            showRenderError(dom, {
+                summary: "Export failed: " + (event.data.error || "unknown error"),
+                log: event.data.log || "",
+            });
             return;
         }
         if (event.data.type === "ok") {
@@ -224,36 +316,23 @@ export function createRenderer({
 
     dom.downloadStlButton.addEventListener("click", function () {
         if (lastResult != null) {
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(new Blob([lastResult.stl], { type: "application/octet-stream" }));
-            const customization = getCustomization();
-            let stem = "";
-            if (exportFileStem !== null) {
-                if (exportFileStem.js != null) {
-                    try {
-                        const expression = String(exportFileStem.js);
-                        const evaluator = new Function(...Object.keys(customization), "return " + expression);
-                        const evaluated = evaluator(...Object.values(customization));
-                        stem = evaluated == null ? "" : String(evaluated);
-                    } catch (e) {
-                        console.warn("Failed to evaluate export-file-stem expression", e);
-                        if (exportFileStem.fixed != null) {
-                            stem = String(exportFileStem.fixed);
-                        }
-                    }
-                } else if (exportFileStem.fixed != null) {
-                    stem = String(exportFileStem.fixed);
-                }
-            }
-            link.download = stem + ".stl";
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
+            downloadBytes(lastResult.stl, exportFilename("stl"), "application/octet-stream");
             if (umamiTrackExport !== null) {
                 trackUmamiEvent("export-stl", umamiTrackExport, getCustomization());
             }
         }
     });
+
+    if (dom.downloadStepButton) {
+        // STEP files are generated on demand from the last render, since
+        // exporting is slower than tessellating.
+        dom.downloadStepButton.addEventListener("click", function () {
+            if (lastResult != null && !isExporting) {
+                setExporting(true);
+                worker.postMessage({ type: "export", format: "step" });
+            }
+        });
+    }
 
     return {
         startRender,

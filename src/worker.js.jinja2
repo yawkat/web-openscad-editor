@@ -1,96 +1,9 @@
 import OpenSCAD from "./openscad-wasm/openscad.js"
-import * as THREE from "https://esm.sh/three@0.160.0"
-import {GLTFExporter} from "https://esm.sh/three@0.160.0/examples/jsm/exporters/GLTFExporter.js"
 import {offMeshToBinaryStl, parseOffMesh} from "./{{ static_dir }}/editor/off.js"
+import {meshToGlb} from "./{{ static_dir }}/editor/glb.js"
+import {formatErrorForMessage, getLog, logError, logInfo, resetLog} from "./{{ static_dir }}/editor/workerLog.js"
 
 console.log("Worker started")
-
-const DEFAULT_TOP_COLOR = new THREE.Color(0x63696f)
-const DEFAULT_BOTTOM_COLOR = new THREE.Color(0xc4d0dd)
-
-const MAX_LOG_CHARS = 1024 * 1024
-let currentLog = ""
-let currentLogTruncated = false
-
-function stringifyLogValue(v) {
-    if (v instanceof Error) {
-        return v && v.stack ? String(v.stack) : String(v)
-    }
-    if (typeof v === "string") {
-        return v
-    }
-    if (v === null) {
-        return "null"
-    }
-    if (v === undefined) {
-        return "undefined"
-    }
-    try {
-        return JSON.stringify(v)
-    } catch (e) {
-        return String(v)
-    }
-}
-
-function appendLogLine(line) {
-    if (!line) {
-        line = ""
-    }
-    currentLog += String(line) + "\n"
-    if (currentLog.length > MAX_LOG_CHARS) {
-        currentLog = currentLog.slice(currentLog.length - MAX_LOG_CHARS)
-        if (!currentLogTruncated) {
-            currentLogTruncated = true
-            currentLog = "[log truncated]\n" + currentLog
-        }
-    }
-}
-
-function logToConsoleAndBuffer(level, ...args) {
-    const line = args.map(stringifyLogValue).join(" ")
-    appendLogLine(line)
-    const fn = console[level] || console.log
-    fn.apply(console, args)
-}
-
-function logInfo(...args) {
-    logToConsoleAndBuffer("log", ...args)
-}
-
-function logError(...args) {
-    logToConsoleAndBuffer("error", ...args)
-}
-
-function formatErrorForMessage(e) {
-    if (e instanceof Error) {
-        return String(e && e.message ? e.message : e)
-    }
-    if (typeof e === "string") {
-        return e
-    }
-    if (!e || typeof e !== "object") {
-        return String(e)
-    }
-
-    const message = typeof e.message === "string" ? e.message.trim() : ""
-    if (message) {
-        return message
-    }
-    if (typeof e.name === "string" && e.name) {
-        if (typeof e.errno === "number") {
-            return `${e.name} (errno ${e.errno})`
-        }
-        return e.name
-    }
-    if (typeof e.errno === "number") {
-        return `Error (errno ${e.errno})`
-    }
-    try {
-        return JSON.stringify(e)
-    } catch (err) {
-        return String(e)
-    }
-}
 
 let runQueue = Promise.resolve()
 // OpenSCAD's WASM build aborts its runtime after a render.
@@ -166,129 +79,9 @@ async function populateInstanceInputFiles(instance) {
     }
 }
 
-function applyDepthCueing(geometry, previewStyle) {
-    const pos = geometry.getAttribute("position")
-    if (!pos || pos.count < 3) {
-        return
-    }
-    const baseColors = geometry.getAttribute("color")
-    const useFaceColors = previewStyle === "colors"
-
-    let minZ = Infinity
-    let maxZ = -Infinity
-    for (let i = 0; i < pos.count; i++) {
-        const z = pos.getZ(i)
-        if (z < minZ) minZ = z
-        if (z > maxZ) maxZ = z
-    }
-
-    const range = maxZ - minZ
-    if (!isFinite(range) || range <= 0) {
-        return
-    }
-
-    const colors = new Float32Array(pos.count * 3)
-    for (let i = 0; i < pos.count; i++) {
-        const z = pos.getZ(i)
-        const t = (z - minZ) / range
-        const k = i * 3
-
-        if (useFaceColors && baseColors) {
-            const r = baseColors.getX(i)
-            const g = baseColors.getY(i)
-            const b = baseColors.getZ(i)
-            // Keep the OpenSCAD color hue, but vary luminance with Z so
-            // pockets and vertical surfaces remain readable. Colored
-            // models need a narrower luminance range than the default
-            // gray preview or saturated colors wash out.
-            colors[k] = (r + (1 - r) * 0.08) * (1 - t) + (r * 0.78) * t
-            colors[k + 1] = (g + (1 - g) * 0.08) * (1 - t) + (g * 0.78) * t
-            colors[k + 2] = (b + (1 - b) * 0.08) * (1 - t) + (b * 0.78) * t
-        } else {
-            const c = DEFAULT_BOTTOM_COLOR.clone().lerp(DEFAULT_TOP_COLOR, t)
-            colors[k] = c.r
-            colors[k + 1] = c.g
-            colors[k + 2] = c.b
-        }
-    }
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
-}
-
-async function geometryToGlb(geometry, previewStyle) {
-    if (geometry.index) {
-        // Keep vertex colors stable for per-face colored geometry.
-        geometry = geometry.toNonIndexed()
-    }
-    if (!geometry.getAttribute("normal")) {
-        geometry.computeVertexNormals()
-    }
-
-    const neutralLighting = previewStyle === "colors"
-    const material = new THREE.MeshStandardMaterial({
-        color: 0xc4d0dd,
-        metalness: neutralLighting ? 0.0 : 0.8,
-        roughness: neutralLighting ? 0.55 : 0.4,
-        flatShading: true,
-        vertexColors: true,
-    })
-    const mesh = new THREE.Mesh(geometry, material)
-    // OpenSCAD uses mm; glTF uses meters.
-    mesh.scale.setScalar(0.001)
-
-    const scene = new THREE.Scene()
-    scene.add(mesh)
-
-    // Add a few basic lights so the exported GLB shades nicely even without an HDR environment.
-    const lightA = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xd6629e, neutralLighting ? 4 : 20) // top right
-    lightA.position.set(1000, 1000, 1000) // north east, top
-    lightA.lookAt(0, 0, 0)
-    scene.add(lightA)
-
-    const lightB = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0x5571a8, neutralLighting ? 2.5 : 20) // top left
-    lightB.position.set(-1000, 1000, 1000) // north west, top
-    lightB.lookAt(0, 0, 0)
-    scene.add(lightB)
-
-    const lightC = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xbf86bb, neutralLighting ? 1 : 15) // bottom
-    lightC.position.set(0, -1000, -1000) // south, bottom
-    lightC.lookAt(0, 0, 0)
-    scene.add(lightC)
-
-    const lightD = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xbf86bb, neutralLighting ? 1.5 : 15) // front
-    lightD.position.set(0, -1000, 1000) // south, top
-    lightD.lookAt(0, 0, 0)
-    scene.add(lightD)
-
-    return await new Promise((resolve, reject) => {
-        const exporter = new GLTFExporter()
-        exporter.parse(
-            scene,
-            (result) => {
-                if (result instanceof ArrayBuffer) {
-                    resolve(result)
-                } else {
-                    reject(new Error("Expected binary glTF (ArrayBuffer)"))
-                }
-            },
-            (error) => reject(error),
-            { binary: true },
-        )
-    })
-}
-
 function offBytesToMesh(offBytes) {
     const text = new TextDecoder().decode(offBytes)
     return parseOffMesh(text)
-}
-
-async function offMeshToGlb(mesh, previewStyle) {
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3))
-    if (mesh.colors) {
-        geometry.setAttribute("color", new THREE.BufferAttribute(mesh.colors, 3))
-    }
-    applyDepthCueing(geometry, previewStyle)
-    return geometryToGlb(geometry, previewStyle)
 }
 
 async function createInstance() {
@@ -373,7 +166,7 @@ async function renderOnce({ input, normalParams, additionalParams, previewStyle 
         instance.callMain(args)
         const offBytes = instance.FS.readFile(output)
         const mesh = offBytesToMesh(offBytes)
-        const glb = await offMeshToGlb(mesh, previewStyle || "shaded")
+        const glb = await meshToGlb(mesh, previewStyle || "shaded")
         const stl = offMeshToBinaryStl(mesh)
         let camera = null
         try {
@@ -397,7 +190,7 @@ async function renderOnce({ input, normalParams, additionalParams, previewStyle 
             type: "error",
             error: formatErrorForMessage(e),
             stack: String(e && e.stack ? e.stack : ""),
-            log: currentLog,
+            log: getLog(),
         })
     }
 }
@@ -413,8 +206,7 @@ self.addEventListener("message", (event) => {
         if (msg.type !== "render") {
             return
         }
-        currentLog = ""
-        currentLogTruncated = false
+        resetLog()
         await renderOnce({
             input: msg.input,
             normalParams: msg.normalParams,
@@ -428,7 +220,7 @@ self.addEventListener("message", (event) => {
             type: "error",
             error: formatErrorForMessage(e),
             stack: String(e && e.stack ? e.stack : ""),
-            log: currentLog,
+            log: getLog(),
         })
     })
 })

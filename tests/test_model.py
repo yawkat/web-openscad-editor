@@ -1,3 +1,4 @@
+import pytest
 import model
 import config_generated
 
@@ -174,3 +175,53 @@ def test_preview_style_config():
         "model": [ { "file": "model.scad" } ]
     }))
     assert style_value(models[0]) == "colors"
+
+
+class CadqueryParamsLoader(MockParamsLoader):
+    def load_scad(self, declared_path: str) -> model.ParamSet:
+        raise AssertionError("OpenSCAD should not be used for CadQuery models")
+
+
+def test_cadquery_runtime(tmp_path):
+    model_file = tmp_path / "bracket.py"
+    model_file.write_text("# [Size]\nwidth = 10\n")
+    ctx = model.ScadContext(
+        config_generated.ModelItem.model_validate({
+            "file": str(model_file),
+            "runtime": "cadquery",
+        }),
+        CadqueryParamsLoader({}),
+    )
+    assert ctx.runtime == config_generated.Runtime.cadquery
+    assert ctx.name() == "bracket"
+    assert [p.name for p in ctx.params] == ["width"]
+    assert ctx.params[0].group.name == "Size"
+
+
+def test_cadquery_rejects_additional_params_scad(tmp_path):
+    model_file = tmp_path / "bracket.py"
+    model_file.write_text("width = 10\n")
+    with pytest.raises(RuntimeError, match="additional-params-scad"):
+        model.ScadContext(
+            config_generated.ModelItem.model_validate({
+                "file": str(model_file),
+                "runtime": "cadquery",
+                "additional-params-scad": ["params.scad"],
+            }),
+            CadqueryParamsLoader({}),
+        )
+
+
+def test_runtime_config():
+    configs = model.flatten_model_configs(config_generated.WebOpenscadEditorConfiguration.model_validate({
+        "model-template": { "cq": { "runtime": "cadquery" } },
+        "model": [
+            { "file": "model.py" },
+            { "file": "model.py", "template": ["cq"] },
+            { "file": "model.scad", "template": ["cq"], "runtime": "openscad" },
+        ]
+    }))
+    # No detection from the file extension
+    assert model.model_runtime(configs[0]) == config_generated.Runtime.openscad
+    assert model.model_runtime(configs[1]) == config_generated.Runtime.cadquery
+    assert model.model_runtime(configs[2]) == config_generated.Runtime.openscad

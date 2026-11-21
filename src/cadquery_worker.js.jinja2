@@ -1,0 +1,237 @@
+import {loadPyodide} from "https://cdn.jsdelivr.net/pyodide/v{{ cadquery_lock['pyodide-version'] }}/full/pyodide.mjs"
+import {offMeshToBinaryStl} from "./{{ static_dir }}/editor/off.js"
+import {meshToGlb} from "./{{ static_dir }}/editor/glb.js"
+import {formatErrorForMessage, getLog, logError, logInfo, resetLog} from "./{{ static_dir }}/editor/workerLog.js"
+
+console.log("CadQuery worker started")
+
+// Model files are written below this directory in the Python file system, so
+// they can't collide with Pyodide's own directories (e.g. /lib).
+const MODEL_ROOT = "/model"
+const SUPPORT_ROOT = "/wose"
+const PYODIDE_PACKAGES = {{ cadquery_lock['pyodide-packages'] | json_dump }}
+const MOCK_PACKAGES = {{ cadquery_lock['mock-packages'] | json_dump }}
+const WHEELS = {{ cadquery_wheels | json_dump }}
+const EXTRA_PACKAGES = {{ (config.cadquery.packages or []) | json_dump }}
+const PYTHON_SOURCES = {{ cadquery_python_sources | json_dump }}
+const TOLERANCE = {{ config.cadquery.tolerance | json_dump }}
+const ANGULAR_TOLERANCE = {{ config.cadquery.angular_tolerance | json_dump }}
+// Used for parts without a color when other parts have one (OpenSCAD's default).
+const DEFAULT_PART_COLOR = [0.976, 0.843, 0.173]
+
+const INPUT_FILES = new Map()
+{% for virtual_path, digest in fs_manifest.items() %}
+INPUT_FILES.set({{ virtual_path | json_dump }}, `./{{ fs_cas_dir }}/{{ digest }}`)
+{% endfor %}
+
+let runQueue = Promise.resolve()
+let runtimePromise = null
+let runtimeReady = false
+
+function progress(message) {
+    logInfo(message)
+    self.postMessage({ type: "progress", message })
+}
+
+async function fetchBytes(url) {
+    const r = await fetch(url)
+    if (!r.ok) {
+        throw new Error(`Failed to fetch ${url}: ${r.status} ${r.statusText}`)
+    }
+    return new Uint8Array(await r.arrayBuffer())
+}
+
+function writeFile(pyodide, path, data) {
+    const parent = path.substring(0, path.lastIndexOf("/"))
+    if (parent) {
+        pyodide.FS.mkdirTree(parent)
+    }
+    pyodide.FS.writeFile(path, data)
+}
+
+async function initRuntime() {
+    progress("Loading Python runtime…")
+    const inputFilesPromise = Promise.all(
+        Array.from(INPUT_FILES.entries()).map(async ([path, url]) => [path, await fetchBytes(url)]),
+    )
+    const pyodide = await loadPyodide({ stdout: logInfo, stderr: logInfo })
+
+    progress("Loading Python packages…")
+    await pyodide.loadPackage(PYODIDE_PACKAGES, { messageCallback: logInfo, errorCallback: logError })
+
+    progress("Installing CadQuery…")
+    const micropip = pyodide.pyimport("micropip")
+    // Packages that CadQuery declares as dependencies but that are either
+    // provided by OCP.wasm under another name or not needed in the browser.
+    for (const [name, version] of Object.entries(MOCK_PACKAGES)) {
+        micropip.add_mock_package(name, version)
+    }
+    const wheelUrls = WHEELS.map((w) => new URL(w, self.location.href).href)
+    await micropip.install.callKwargs(wheelUrls, { deps: false })
+    if (EXTRA_PACKAGES.length > 0) {
+        progress("Installing additional packages…")
+        await micropip.install(EXTRA_PACKAGES)
+    }
+    micropip.destroy()
+
+    for (const [name, source] of Object.entries(PYTHON_SOURCES)) {
+        writeFile(pyodide, `${SUPPORT_ROOT}/${name}`, source)
+    }
+    for (const [path, bytes] of await inputFilesPromise) {
+        writeFile(pyodide, MODEL_ROOT + path, bytes)
+    }
+
+    progress("Loading CadQuery…")
+    pyodide.runPython(`
+import sys
+sys.path.insert(0, ${JSON.stringify(SUPPORT_ROOT)})
+import cadquery_stubs
+cadquery_stubs.install()
+import cadquery
+`)
+    const runner = pyodide.pyimport("cadquery_runner")
+    runtimeReady = true
+    return { pyodide, runner }
+}
+
+async function getRuntime() {
+    if (!runtimePromise) {
+        runtimePromise = initRuntime()
+    }
+    try {
+        return await runtimePromise
+    } catch (e) {
+        // Allow a retry on the next render, e.g. after a network error.
+        runtimePromise = null
+        throw e
+    }
+}
+
+function bytesToFloat32(bytes) {
+    // Copy so the Float32Array is correctly aligned.
+    const copy = bytes.slice()
+    return new Float32Array(copy.buffer, 0, copy.byteLength / 4)
+}
+
+function combineMeshes(parts) {
+    let total = 0
+    for (const part of parts) {
+        total += part.positions.length
+    }
+    const positions = new Float32Array(total)
+    const anyColor = parts.some((part) => part.color)
+    const colors = anyColor ? new Float32Array(total) : null
+    let offset = 0
+    for (const part of parts) {
+        positions.set(part.positions, offset)
+        if (colors) {
+            const [r, g, b] = part.color || DEFAULT_PART_COLOR
+            for (let i = offset; i < offset + part.positions.length; i += 3) {
+                colors[i] = r
+                colors[i + 1] = g
+                colors[i + 2] = b
+            }
+        }
+        offset += part.positions.length
+    }
+    return { positions, colors }
+}
+
+function postError(e) {
+    logError(e)
+    let summary = formatErrorForMessage(e)
+    if (e && e.type && typeof e.message === "string") {
+        // Python exception: use the last traceback line as the summary.
+        const lines = e.message.trim().split("\n")
+        summary = lines[lines.length - 1]
+    }
+    self.postMessage({
+        type: "error",
+        error: summary,
+        stack: String(e && e.stack ? e.stack : ""),
+        log: getLog(),
+    })
+}
+
+async function render({ input, normalParams, additionalParams, previewStyle }) {
+    const { pyodide, runner } = await getRuntime()
+    if (!INPUT_FILES.has(input)) {
+        throw new Error(`Unknown input file: ${input}`)
+    }
+    const params = { ...normalParams, ...additionalParams }
+    logInfo("Parameters:", params)
+    progress("Rendering…")
+
+    const pyParams = pyodide.toPy(params)
+    let result
+    try {
+        result = runner.render(MODEL_ROOT + input, pyParams, TOLERANCE, ANGULAR_TOLERANCE)
+    } finally {
+        pyParams.destroy()
+    }
+    let parts
+    try {
+        parts = result.toJs({ dict_converter: Object.fromEntries }).map((part) => ({
+            name: part.name,
+            color: part.color,
+            positions: bytesToFloat32(part.positions),
+        }))
+    } finally {
+        result.destroy()
+    }
+    logInfo("Parts:", parts.map((p) => `${p.name} (${p.positions.length / 9} triangles)`).join(", "))
+
+    const mesh = combineMeshes(parts)
+    const glb = await meshToGlb(mesh, previewStyle || "shaded")
+    const stl = offMeshToBinaryStl(mesh)
+    self.postMessage({ type: "ok", glb, stl, camera: null })
+}
+
+async function exportFile({ format }) {
+    const { pyodide, runner } = await getRuntime()
+    if (format !== "step") {
+        throw new Error(`Unsupported export format: ${format}`)
+    }
+    const output = "/tmp/export.step"
+    runner.export_step(output)
+    const bytes = pyodide.FS.readFile(output)
+    pyodide.FS.unlink(output)
+    self.postMessage({ type: "export-ok", format, bytes })
+}
+
+self.addEventListener("message", (event) => {
+    const msg = event && event.data
+    if (!msg || typeof msg !== "object") {
+        return
+    }
+    // Serialize runs; the Python runtime is shared between them.
+    runQueue = runQueue.then(async () => {
+        if (msg.type === "render") {
+            // Keep the runtime loading log until it is ready, so that load
+            // failures show up in the render log.
+            if (runtimeReady) {
+                resetLog()
+            }
+            try {
+                await render(msg)
+            } catch (e) {
+                postError(e)
+            }
+        } else if (msg.type === "export") {
+            try {
+                await exportFile(msg)
+            } catch (e) {
+                logError(e)
+                self.postMessage({
+                    type: "export-error",
+                    format: msg.format,
+                    error: formatErrorForMessage(e),
+                    log: getLog(),
+                })
+            }
+        }
+    })
+})
+
+// Start loading the runtime right away; the first render waits for it.
+getRuntime().catch((e) => logError(e))

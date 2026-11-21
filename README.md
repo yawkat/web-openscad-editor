@@ -1,6 +1,6 @@
 # web-openscad-editor
 
-This repo contains a small generator that turns an OpenSCAD file into a self-contained web export (HTML + worker + OpenSCAD WASM). Try it out [here](https://web-openscad-editor.yawk.at/)!
+This repo contains a small generator that turns an OpenSCAD file into a self-contained web export (HTML + worker + OpenSCAD WASM). [CadQuery](https://github.com/CadQuery/cadquery) models are supported as well and run in the browser using [Pyodide](https://pyodide.org/) and [OCP.wasm](https://github.com/yeicor/OCP.wasm). Try it out [here](https://web-openscad-editor.yawk.at/)!
 
 Warning: Heavily vibe-coded.
 
@@ -100,13 +100,28 @@ enable-features = ["roof"]
 commit = "0123456789abcdef0123456789abcdef01234567"
 ```
 
+### CadQuery Settings
+
+Settings for [CadQuery models](#cadquery-models) are configured in the `[cadquery]` table. All settings are optional. CadQuery and its dependencies are pinned by the generator and bundled into the output; Pyodide itself is loaded from the jsDelivr CDN.
+
+```toml
+[cadquery]
+# Tessellation tolerances used for the preview and the STL export. Smaller values give
+# smoother curves but larger files. The linear tolerance is in mm, the angular one in radians.
+tolerance = 0.1
+angular-tolerance = 0.2
+# Additional pure-Python packages to install with micropip in the browser before running
+# models. These are downloaded from PyPI at runtime.
+packages = ["cq_gears"]
+```
+
 ### Model Files
 
 The individual models are defined using the ``[[model]]`` array. The `file` is the only required field.
 
 ```toml
 [[model]]
-# Path to the SCAD file, relative to the configuration file
+# Path to the model file (.scad or .py), relative to the configuration file
 file = "my-model.scad"
 # Whether this model should act as the landing page for the generated website. If this is 
 # `true`, the model will be available at "https://example.com/". If this is `false`, it 
@@ -116,6 +131,9 @@ file = "my-model.scad"
 # will act as the landing page; for multiple models, it will not. Only one model per 
 # project can act as the landing page.
 index = true
+# Which runtime renders the model: "openscad" (default) or "cadquery". The runtime is never
+# guessed from the file extension, so CadQuery models must set this explicitly.
+runtime = "openscad"
 ```
 
 ### Model Configuration
@@ -265,6 +283,51 @@ If multiple parameter metadata definitions match a parameter name, the metadata 
 
 Note that if there is no matching parameter for a metadata definition, even if the definition is a wildcard, an exception will be thrown. If you intentionally write a definition that does not always match a parameter, you can disable this check using `require-present = false`.
 
+### CadQuery Models
+
+Set `runtime = "cadquery"` to use a CadQuery Python script as a model:
+
+```toml
+[[model]]
+file = "enclosure.py"
+runtime = "cadquery"
+# Show the colors passed to show_object in the preview
+preview-style = "colors"
+```
+
+All model configuration options above work for CadQuery models too, except `additional-params-scad`.
+
+Following CadQuery's [cqgi](https://cadquery.readthedocs.io/en/latest/cqgi.html) conventions, every top-level assignment of a constant (number, string, boolean or a list of numbers) becomes a customizable parameter. Names starting with an underscore are not exposed. The customizer metadata uses the same comment syntax as the OpenSCAD customizer, and `describe_parameter` is supported as well:
+
+```python
+import cadquery as cq
+
+# [Size]
+
+# Outer width and depth in mm
+size = [80, 50]  # [20:1:200]
+height = 30  # [10:1:100]
+describe_parameter(height, "Height in mm")
+
+# [Style]
+color = "steelblue"  # [steelblue, tomato, gold]
+holes = "corners"  # [corners:Four corners, none:No holes]
+
+# [Hidden]
+tolerance = 0.2
+
+part = cq.Workplane().box(size[0], size[1], height)
+# Every shown object becomes a named, colored part. Colors can be names, "#rrggbb"
+# strings, RGB tuples or cq.Color. Assemblies keep their part colors.
+show_object(part, name="body", options={"color": color})
+```
+
+If the script does not call `show_object`, a top-level `result` variable is shown instead.
+
+Local Python modules imported by the model (e.g. `from helpers import rounded_box`) and files loaded with `cq.importers.importStep("parts/bolt.step")` (and the other importers) are bundled automatically. Imports are resolved relative to the model's directory, which is also the working directory while the model runs.
+
+In addition to "Save STL", CadQuery models get a "Save STEP" button that exports the exact geometry with part names and colors. The first render takes a while because the Python runtime has to load; later renders reuse it and are much faster.
+
 ### Model Templates
 
 To reuse model configuration, you can define a model template:
@@ -320,7 +383,7 @@ Templates can also inherit from other templates, but they must be declared in in
 
 ### Analytics
 
-If you want to learn how your users configure your models, you can enable analytics tracking for specific parameters using [Umami](https://umami.is/). Whenever a user clicks the "Render" or "Export STL" button, a [custom event](https://umami.is/docs/track-events) is sent to Umami. The event properties will contain the configured values of the specified parameters.
+If you want to learn how your users configure your models, you can enable analytics tracking for specific parameters using [Umami](https://umami.is/). Whenever a user clicks the "Render", "Save STL" or "Save STEP" button, a [custom event](https://umami.is/docs/track-events) (`render`, `export-stl` or `export-step`) is sent to Umami. The event properties will contain the configured values of the specified parameters.
 
 To ensure user privacy, only track parameters that have few configurable values, such as booleans or enums.
 
@@ -334,8 +397,8 @@ file = "my-model.scad"
 # Whenever the user clicks the "Render" button, track the current value of the "magnets" 
 # parameter
 umami-track-render = ["magnets"]
-# Whenever the user clicks the "Export STL" button, track the current value of the 
-# "magnets" and "magnet_style" parameters
+# Whenever the user clicks the "Save STL" (or "Save STEP") button, track the current value 
+# of the "magnets" and "magnet_style" parameters
 umami-track-export = ["magnets", "magnet_style"]
 ```
 
@@ -352,4 +415,4 @@ The configuration classes are auto-generated from `config-schema.json` using Pyd
 
 ## License
 
-While this repository is MIT-licensed, it bundles OpenSCAD binaries which are licensed under GPL. If you use this project, you must also follow the OpenSCAD terms.
+While this repository is MIT-licensed, it bundles OpenSCAD binaries which are licensed under GPL. If you use this project, you must also follow the OpenSCAD terms. Exports with CadQuery models additionally bundle CadQuery (Apache 2.0) and OCP/OpenCascade (LGPL 2.1 with exception), and load Pyodide (MPL 2.0).

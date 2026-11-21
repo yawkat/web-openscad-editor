@@ -86,6 +86,32 @@
         }
       }
     },
+    "cadquery": {
+      "type": "object",
+      "description": "CadQuery-specific configuration. Only used by models with runtime = \"cadquery\".",
+      "default": {},
+      "properties": {
+        "tolerance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 0.1,
+          "description": "Linear tessellation tolerance (mm) used for the preview and STL export"
+        },
+        "angular-tolerance": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 0.2,
+          "description": "Angular tessellation tolerance (radians) used for the preview and STL export"
+        },
+        "packages": {
+          "type": "array",
+          "description": "Additional Python packages (pip requirement strings) installed with micropip in the browser before running models",
+          "items": { "type": "string" },
+          "default": []
+        }
+      },
+      "additionalProperties": false
+    },
     "model-template": {
       "type": "object",
       "patternProperties": {
@@ -97,7 +123,7 @@
     },
     "model": {
       "type": "array",
-      "description": "Input SCAD files to process",
+      "description": "Model files to process",
       "minItems": 1,
       "items": {
         "allOf": [
@@ -108,7 +134,7 @@
             "properties": {
               "file": {
                 "type": "string",
-                "description": "Path to SCAD file"
+                "description": "Path to the model file (.scad for OpenSCAD, .py for CadQuery)"
               },
               "index": {
                 "type": ["boolean", "null"],
@@ -135,6 +161,12 @@
           },
           "default": ["default"]
         },
+        "runtime": {
+          "type": ["string", "null"],
+          "enum": ["openscad", "cadquery", null],
+          "default": null,
+          "description": "Which runtime renders this model: OpenSCAD for .scad files, or CadQuery (Python, run in the browser with Pyodide). Defaults to openscad."
+        },
         "additional-params": {
           "type": "array",
           "description": "Array of parameter JSON files",
@@ -145,7 +177,7 @@
         },
         "additional-params-scad": {
           "type": "array",
-          "description": "Array of OpenSCAD files to load additional params from",
+          "description": "Array of OpenSCAD files to load additional params from (OpenSCAD runtime only)",
           "items": {
             "type": "string"
           },
@@ -288,7 +320,7 @@
         },
         "umami-track-export": {
           "type": ["array", "null"],
-          "description": "List of model parameter names to track when model is exported (STL download). Set to null (default) to disable tracking, or [] to track with no parameters.",
+          "description": "List of model parameter names to track when model is exported (STL or STEP download). Set to null (default) to disable tracking, or [] to track with no parameters.",
           "items": {
             "type": "string"
           },
