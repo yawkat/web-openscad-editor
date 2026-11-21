@@ -183,6 +183,29 @@ export function createRenderer({
 
     // ── worker event handlers ───────────────────────────────────────
 
+    /**
+     * Start a helper worker that prepares one of the CadQuery worker's
+     * runtime files, and forward its result (see runtimeFilesWorker.js).
+     */
+    function startRuntimeFileHelper({ helperUrl, task, url }) {
+        const helper = new Worker(helperUrl, { type: "module" });
+        const finish = (message) => {
+            helper.terminate();
+            worker.postMessage(message);
+        };
+        helper.addEventListener("message", (event) => {
+            if (event.data.error) {
+                finish({ type: "runtime-file-failed", task, error: event.data.error });
+            } else {
+                finish({ type: "runtime-file", task, result: event.data.result });
+            }
+        });
+        helper.addEventListener("error", (event) => {
+            finish({ type: "runtime-file-failed", task, error: String(event.message || "helper worker failed") });
+        });
+        helper.postMessage({ task, url });
+    }
+
     worker.addEventListener("error", (event) => {
         console.error("Worker script error", event);
         showRenderError(dom, {
@@ -205,6 +228,10 @@ export function createRenderer({
 
     worker.addEventListener("message", (event) => {
         if (!event.data || typeof event.data !== "object") {
+            return;
+        }
+        if (event.data.type === "prepare-runtime-file") {
+            startRuntimeFileHelper(event.data);
             return;
         }
         if (event.data.type === "progress") {
@@ -233,7 +260,11 @@ export function createRenderer({
         }
         if (event.data.type === "ok") {
             lastResult = event.data;
+            const previousUrl = dom.modelViewer.src;
             dom.modelViewer.src = URL.createObjectURL(new Blob([event.data.glb], { type: "model/gltf-binary" }));
+            if (previousUrl && previousUrl.startsWith("blob:")) {
+                URL.revokeObjectURL(previousUrl);
+            }
             applyCameraFromSummary(event.data.camera, dom.modelViewer);
             clearRenderError(dom);
             setRendering(false);
@@ -263,9 +294,16 @@ export function createRenderer({
     // ── render control ──────────────────────────────────────────────
 
     function startRender() {
+        if (isRendering) {
+            // Only one render runs at a time. Render the latest parameters
+            // once the current render is done, instead of queueing requests
+            // that the worker would work through one by one.
+            isDirty = true;
+            return;
+        }
+        const currentCustomization = getCustomization();
         clearRenderError(dom);
         setRendering(true);
-        const currentCustomization = getCustomization();
         const additionalParamNames = getAdditionalParamNames();
         const normalParams = {};
         const additionalParams = {};
@@ -286,12 +324,7 @@ export function createRenderer({
     }
 
     function triggerAutoRender() {
-        if (!dom.autoRenderCheckbox.checked) {
-            return;
-        }
-        if (isRendering) {
-            isDirty = true;
-        } else {
+        if (dom.autoRenderCheckbox.checked) {
             startRender();
         }
     }

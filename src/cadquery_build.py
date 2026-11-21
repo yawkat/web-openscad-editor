@@ -15,9 +15,10 @@ import cadquery_deps
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 # Python modules of this project that run in the browser
 RUNTIME_MODULES = ["cadquery_runner.py", "lazy_imports.py"]
-# Bundled packages that CadQuery imports at module level but rarely uses.
-# They are imported on first use (see lazy_imports.py).
-DEFERRED_INSTALLED_MODULES = ["ezdxf"]
+# Bundled modules that are imported at module level but rarely used. They are
+# imported on first use (see lazy_imports.py). pyparsing.testing pulls in
+# unittest and friends.
+DEFERRED_INSTALLED_MODULES = ["ezdxf", "pyparsing.testing"]
 CACHE_DIR = os.path.join("build", "cadquery")
 
 
@@ -155,7 +156,7 @@ def prepare_runtime(
     """Resolve and bundle the browser runtime; return worker template variables."""
     pyodide_lock = load_pyodide_lock(pyodide_version)
     python_version = pyodide_lock["info"]["python"]
-    packages = cadquery_deps.resolve_from_project(project_dir, pyodide_lock)
+    packages = cadquery_deps.resolve_from_project(project_dir, pyodide_lock, pyodide_version)
     for warning in packages.warnings:
         print("Note:", warning)
 
@@ -179,7 +180,9 @@ def prepare_runtime(
         "pyodide_version": pyodide_version,
         "pyodide_packages": packages.pyodide_packages,
         "deferred_packages": packages.deferred_pyodide_packages,
-        "deferred_installed_modules": [m for m in DEFERRED_INSTALLED_MODULES if m in bundled],
+        "deferred_installed_modules": [
+            m for m in DEFERRED_INSTALLED_MODULES if m.split(".")[0] in bundled
+        ],
         "ocp_wheel_url": f"{output_subdir}/{ocp.filename}",
         "site_packages_url": f"{output_subdir}/{site_name}",
     }

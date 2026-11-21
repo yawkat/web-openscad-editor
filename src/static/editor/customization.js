@@ -219,7 +219,14 @@ export function createCustomizationController({ defaultCustomization, additional
         }
     }
 
-    function applyCustomization(customization, { reset = true } = {}) {
+    /**
+     * @param {object} customization - values to apply
+     * @param {object} [options]
+     * @param {boolean} [options.reset] - reset all other values to their defaults
+     * @param {boolean} [options.notify] - call onChanged (and so auto-render).
+     *     Initialization passes false and renders once when it is done.
+     */
+    function applyCustomization(customization, { reset = true, notify = true } = {}) {
         if (reset) {
             resetCurrentCustomizationToDefault();
         }
@@ -232,7 +239,9 @@ export function createCustomizationController({ defaultCustomization, additional
         }
         applyCustomizationToInputs();
         updateUrlFromCustomization();
-        onChanged();
+        if (notify) {
+            onChanged();
+        }
     }
 
     function setValue(name, value) {

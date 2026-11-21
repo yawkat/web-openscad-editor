@@ -57,6 +57,20 @@ function applyDepthCueing(geometry, previewStyle) {
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
 }
 
+/**
+ * Add a directional light pointing at the origin.
+ *
+ * glTF lights shine along their local -Z axis. GLTFExporter only exports the
+ * direction correctly if the light's target is its child at (0, 0, -1), so
+ * the light is rotated to face the origin instead of moving the target.
+ */
+function addLight(scene, light) {
+    light.lookAt(0, 0, 0)
+    light.add(light.target)
+    light.target.position.set(0, 0, -1)
+    scene.add(light)
+}
+
 async function geometryToGlb(geometry, previewStyle) {
     if (geometry.index) {
         // Keep vertex colors stable for per-face colored geometry.
@@ -84,23 +98,19 @@ async function geometryToGlb(geometry, previewStyle) {
     // Add a few basic lights so the exported GLB shades nicely even without an HDR environment.
     const lightA = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xd6629e, neutralLighting ? 4 : 20) // top right
     lightA.position.set(1000, 1000, 1000) // north east, top
-    lightA.lookAt(0, 0, 0)
-    scene.add(lightA)
+    addLight(scene, lightA)
 
     const lightB = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0x5571a8, neutralLighting ? 2.5 : 20) // top left
     lightB.position.set(-1000, 1000, 1000) // north west, top
-    lightB.lookAt(0, 0, 0)
-    scene.add(lightB)
+    addLight(scene, lightB)
 
     const lightC = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xbf86bb, neutralLighting ? 1 : 15) // bottom
     lightC.position.set(0, -1000, -1000) // south, bottom
-    lightC.lookAt(0, 0, 0)
-    scene.add(lightC)
+    addLight(scene, lightC)
 
     const lightD = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xbf86bb, neutralLighting ? 1.5 : 15) // front
     lightD.position.set(0, -1000, 1000) // south, top
-    lightD.lookAt(0, 0, 0)
-    scene.add(lightD)
+    addLight(scene, lightD)
 
     return await new Promise((resolve, reject) => {
         const exporter = new GLTFExporter()

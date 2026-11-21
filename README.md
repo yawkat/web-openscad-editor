@@ -369,7 +369,7 @@ display-condition = {fixed = false}
 
 Local modules imported by the model (e.g. `from helpers import rounded_box`) and files loaded with `cq.importers.importStep("parts/bolt.step")` (and the other importers) are bundled automatically. Imports are resolved relative to the model's directory, which is also the working directory while the model runs. At build time, the generator imports the models in the uv project's environment to read their parameters.
 
-In addition to "Save STL", CadQuery models get a "Save STEP" button that exports the exact geometry with part names and colors. The first render takes a while (about 15 seconds) because the Python runtime and OpenCascade have to load; later renders reuse them and are fast. Assembly constraint solving (`Assembly.solve()`) does not work in the browser, because Pyodide's casadi build lacks the IPOPT solver.
+In addition to "Save STL", CadQuery models get a "Save STEP" button that exports the exact geometry with part names and colors. The first render takes a while (around 10 seconds) because the Python runtime and OpenCascade have to load; later renders reuse them and are fast. Assembly constraint solving (`Assembly.solve()`) does not work in the browser, because Pyodide's casadi build lacks the IPOPT solver.
 
 ### Model Templates
 

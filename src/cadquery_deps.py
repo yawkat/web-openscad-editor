@@ -178,10 +178,12 @@ def resolve_browser_packages(
     pylock: typing.Mapping[str, typing.Any],
     pyodide_lock: typing.Mapping[str, typing.Any],
     ocp_lookup: typing.Callable[[str], Wheel],
+    pyodide_base_url: str,
 ) -> BrowserPackages:
     """Map the exported packages to what the browser loads.
 
     ``ocp_lookup`` maps a native cadquery-ocp version to the OCP.wasm wheel.
+    ``pyodide_base_url`` is where Pyodide's package files are hosted.
     """
     info = pyodide_lock["info"]
     environment = marker_environment(info["python"])
@@ -219,9 +221,17 @@ def resolve_browser_packages(
                     f"{name}: using Pyodide's version {pyodide_package.get('version')} "
                     f"instead of the locked {version}"
                 )
-            (deferred if name in DEFERRED_PYODIDE_PACKAGES else eager).append(
-                pyodide_package.get("name", name)
-            )
+            file_name = pyodide_package.get("file_name", "")
+            if name not in DEFERRED_PYODIDE_PACKAGES and file_name.endswith("-none-any.whl"):
+                # Pure-Python: bundle Pyodide's wheel so it gets precompiled
+                # like the other bundled packages.
+                wheels.append(
+                    Wheel(file_name, pyodide_base_url + file_name, pyodide_package["sha256"])
+                )
+            else:
+                (deferred if name in DEFERRED_PYODIDE_PACKAGES else eager).append(
+                    pyodide_package.get("name", name)
+                )
             continue
         wheel = _pure_wheel(package)
         if wheel is not None:
@@ -251,7 +261,7 @@ def python_tag(python_version: str) -> str:
 
 
 def resolve_from_project(
-    project_dir: str, pyodide_lock: typing.Mapping[str, typing.Any]
+    project_dir: str, pyodide_lock: typing.Mapping[str, typing.Any], pyodide_version: str
 ) -> BrowserPackages:
     info = pyodide_lock["info"]
     tag = python_tag(info["python"])
@@ -264,7 +274,12 @@ def resolve_from_project(
             )
         return find_ocp_wasm_wheel(version, info["abi_version"], tag, pypi_cache["json"])
 
-    return resolve_browser_packages(export_pylock(project_dir), pyodide_lock, ocp_lookup)
+    return resolve_browser_packages(
+        export_pylock(project_dir),
+        pyodide_lock,
+        ocp_lookup,
+        PYODIDE_CDN.format(version=pyodide_version),
+    )
 
 
 def wheel_dist_name(filename: str) -> str:

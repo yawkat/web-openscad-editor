@@ -1,7 +1,7 @@
 import {loadPyodide} from "https://cdn.jsdelivr.net/pyodide/v{{ pyodide_version }}/full/pyodide.mjs"
 import {offMeshToBinaryStl} from "./{{ static_dir }}/editor/off.js"
 import {meshToGlb} from "./{{ static_dir }}/editor/glb.js"
-import {readZip} from "./{{ static_dir }}/editor/zip.js"
+import {prepareRuntimeFile} from "./{{ static_dir }}/editor/runtimeFiles.js"
 import {formatErrorForMessage, getLog, logError, logInfo, resetLog} from "./{{ static_dir }}/editor/workerLog.js"
 
 console.log("CadQuery worker started")
@@ -45,10 +45,6 @@ async function fetchBytes(url) {
     return new Uint8Array(await r.arrayBuffer())
 }
 
-async function fetchZip(url) {
-    return readZip(await fetchBytes(url))
-}
-
 function writeFile(pyodide, path, data) {
     const parent = path.substring(0, path.lastIndexOf("/"))
     if (parent) {
@@ -65,12 +61,61 @@ async function timed(label, fn) {
     return result
 }
 
+const helperResults = new Map()
+
+/**
+ * Download and unpack a runtime file (OCP compiled to a WebAssembly.Module, or
+ * site-packages) in a helper worker, so that it runs in parallel with
+ * Pyodide's startup instead of competing with it on this thread.
+ *
+ * The page starts the helper (see rendering.js) and forwards the result,
+ * which avoids relying on nested workers. If that fails, do it here.
+ */
+async function prepareInHelper(task, url) {
+    try {
+        return await new Promise((resolve, reject) => {
+            helperResults.set(task, { resolve, reject })
+            self.postMessage({
+                type: "prepare-runtime-file",
+                helperUrl: new URL("./{{ static_dir }}/editor/runtimeFilesWorker.js", self.location.href).href,
+                task,
+                url,
+            })
+        })
+    } catch (e) {
+        logInfo(`Helper for ${task} failed, preparing it in this worker:`, e)
+        return await prepareRuntimeFile(task, url)
+    }
+}
+
+/**
+ * Load a shared library that was already compiled to a WebAssembly.Module.
+ *
+ * This uses Emscripten's dynamic linker (exposed by Pyodide) to instantiate
+ * the module, then registers it as preloaded, so that Pyodide's loader (and
+ * `import OCP`) use it instead of reading and compiling the file. The file
+ * itself only needs to exist.
+ */
+async function linkPrecompiled(pyodide, path, module) {
+    const emscripten = pyodide._module
+    const key = emscripten.PATH.normalize(path)
+    writeFile(pyodide, path, new Uint8Array(1))
+    const exports = await emscripten.loadWebAssemblyModule(
+        module,
+        { loadAsync: true, nodelete: true, global: true },
+        key,
+        {},
+    )
+    emscripten.preloadedWasm[key] = exports
+    await pyodide._api.loadDynlib(path, true)
+}
+
 async function initRuntime() {
     const start = performance.now()
     progress("Loading Python runtime…")
     // Downloads and unzipping run in parallel with Pyodide's startup.
-    const ocpPromise = timed("download and unzip OCP", () => fetchZip(OCP_WHEEL_URL))
-    const sitePromise = timed("download and unzip site-packages", () => fetchZip(SITE_PACKAGES_URL))
+    const ocpPromise = timed("download, unzip and compile OCP (helper)", () => prepareInHelper("ocp", OCP_WHEEL_URL))
+    const sitePromise = timed("download and unzip site-packages (helper)", () => prepareInHelper("site-packages", SITE_PACKAGES_URL))
     const inputFilesPromise = Promise.all(
         Array.from(INPUT_FILES.entries()).map(async ([path, url]) => [path, await fetchBytes(url)]),
     )
@@ -84,19 +129,11 @@ async function initRuntime() {
     const sitePackages = pyodide.runPython("import sysconfig; sysconfig.get_paths()['purelib']")
 
     progress("Loading OpenCascade…")
-    let ocpLibrary = null
-    for (const entry of await ocpPromise) {
-        const path = `${sitePackages}/${entry.name}`
-        writeFile(pyodide, path, entry.data)
-        if (entry.name.endsWith(".so")) {
-            ocpLibrary = path
-        }
+    const ocp = await ocpPromise
+    for (const file of ocp.files) {
+        writeFile(pyodide, `${sitePackages}/${file.name}`, file.data)
     }
-    if (ocpLibrary && pyodide._api && pyodide._api.loadDynlib) {
-        // Load the library asynchronously. Without this, `import OCP` loads it
-        // synchronously, which works too but blocks longer.
-        await timed("link OCP", () => pyodide._api.loadDynlib(ocpLibrary, true))
-    }
+    await timed("link OCP", () => linkPrecompiled(pyodide, `${sitePackages}/${ocp.libraryName}`, ocp.module))
     progress("Initializing OpenCascade…")
     await timed("import OCP", () => pyodide.runPython("import OCP"))
 
@@ -144,10 +181,19 @@ async function getRuntime() {
     }
 }
 
-function bytesToFloat32(bytes) {
-    // Copy so the Float32Array is correctly aligned.
-    const copy = bytes.slice()
-    return new Float32Array(copy.buffer, 0, copy.byteLength / 4)
+/** Non-indexed triangle positions from a binary STL. */
+function stlPositions(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const count = view.getUint32(80, true)
+    const positions = new Float32Array(count * 9)
+    for (let i = 0; i < count; i++) {
+        // Skip the 12 byte normal; 9 floats of vertex data follow.
+        const offset = 84 + i * 50 + 12
+        for (let j = 0; j < 9; j++) {
+            positions[i * 9 + j] = view.getFloat32(offset + j * 4, true)
+        }
+    }
+    return positions
 }
 
 function combineMeshes(parts) {
@@ -199,6 +245,8 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
     logInfo("Parameters:", params)
     progress("Rendering…")
 
+    const start = performance.now()
+    let timings = {}
     let parts = null
     for (let attempt = 0; parts === null; attempt++) {
         const pyParams = pyodide.toPy(params)
@@ -219,10 +267,11 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
                 progress("Rendering…")
                 continue
             }
+            timings = converted.timings
             parts = converted.parts.map((part) => ({
                 name: part.name,
                 color: part.color,
-                positions: bytesToFloat32(part.positions),
+                positions: stlPositions(part.stl),
             }))
         } finally {
             result.destroy()
@@ -230,9 +279,16 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
     }
     logInfo("Parts:", parts.map((p) => `${p.name} (${p.positions.length / 9} triangles)`).join(", "))
 
+    const pythonDone = performance.now()
     const mesh = combineMeshes(parts)
     const glb = await meshToGlb(mesh, previewStyle || "shaded")
+    const glbDone = performance.now()
     const stl = offMeshToBinaryStl(mesh)
+    const end = performance.now()
+    const s = (ms) => `${(ms / 1000).toFixed(2)}s`
+    logInfo(`[render] build ${s(timings.build * 1000)}, tessellate ${s(timings.tessellate * 1000)}, ` +
+        `python total ${s(pythonDone - start)}, glb ${s(glbDone - pythonDone)}, stl ${s(end - glbDone)}, ` +
+        `worker total ${s(end - start)}`)
     self.postMessage({ type: "ok", glb, stl, camera: null })
 }
 
@@ -251,6 +307,19 @@ async function exportFile({ format }) {
 self.addEventListener("message", (event) => {
     const msg = event && event.data
     if (!msg || typeof msg !== "object") {
+        return
+    }
+    if (msg.type === "runtime-file" || msg.type === "runtime-file-failed") {
+        // Answer to "prepare-runtime-file"; handled right away, not queued.
+        const pending = helperResults.get(msg.task)
+        if (pending) {
+            helperResults.delete(msg.task)
+            if (msg.type === "runtime-file") {
+                pending.resolve(msg.result)
+            } else {
+                pending.reject(new Error(msg.error))
+            }
+        }
         return
     }
     // Serialize runs; the Python runtime is shared between them.

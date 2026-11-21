@@ -178,37 +178,52 @@ def render(
     """Run the model and tessellate the result.
 
     Returns ``{"parts": [...]}`` where each part is ``{"name", "color",
-    "positions"}`` and ``positions`` is a little-endian float32 buffer of
-    non-indexed triangle vertices. Returns ``{"missing": [...]}`` instead if
-    the model needs Pyodide packages that are not loaded yet.
+    "stl"}`` and ``stl`` is the part's mesh as binary STL. Returns
+    ``{"missing": [...]}`` instead if the model needs Pyodide packages that
+    are not loaded yet.
     """
+    import time
+
     import lazy_imports
-    import numpy as np
+    from OCP.StlAPI import StlAPI_Writer
 
     global _last_result
     _last_result = None
+    timings = {}
     try:
+        start = time.perf_counter()
         result = build_model(path, flat_params)
+        timings["build"] = time.perf_counter() - start
+        start = time.perf_counter()
         meshes = []
+        stl_path = "/tmp/wose-part.stl"
         for name, shape, color in _parts(result):
-            vertices, triangles = shape.tessellate(tolerance, angular_tolerance)
-            if not triangles:
+            # Mesh and write with OpenCascade directly: much faster than
+            # CadQuery's tessellate(), which builds a Python object per vertex.
+            shape.mesh(tolerance, angular_tolerance)
+            writer = StlAPI_Writer()
+            writer.ASCIIMode = False
+            if not writer.Write(shape.wrapped, stl_path):
+                raise ModelError(f"Could not mesh part {name}")
+            with open(stl_path, "rb") as f:
+                stl = f.read()
+            # 84 byte header, 50 bytes per triangle
+            if len(stl) <= 84:
                 continue
-            vertex_array = np.array([v.toTuple() for v in vertices], dtype="<f4")
-            positions = vertex_array[np.array(triangles, dtype=np.int64)].reshape(-1)
             meshes.append(
                 {
                     "name": name,
                     "color": None if color is None else list(color),
-                    "positions": positions.tobytes(),
+                    "stl": stl,
                 }
             )
+        timings["tessellate"] = time.perf_counter() - start
     except lazy_imports.MissingPackages as e:
         return {"missing": e.packages}
     if not meshes:
         raise ModelError("The model output does not contain any faces to display.")
     _last_result = result
-    return {"parts": meshes}
+    return {"parts": meshes, "timings": timings}
 
 
 def export_step(output_path: str) -> None:

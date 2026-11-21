@@ -8,7 +8,8 @@ PYODIDE_LOCK = {
     "packages": {
         "numpy": {"name": "numpy", "version": "2.4.6"},
         "scipy": {"name": "scipy", "version": "1.18.0"},
-        "pydantic": {"name": "pydantic", "version": "2.12.5"},
+        "pydantic": {"name": "pydantic", "version": "2.12.5", "file_name": "pydantic-2.12.5-py3-none-any.whl", "sha256": "12" * 32},
+        "pydantic-core": {"name": "pydantic_core", "version": "2.41.5", "file_name": "pydantic_core-2.41.5-cp314-cp314-pyemscripten_2026_0_wasm32.whl", "sha256": "34" * 32},
     },
 }
 
@@ -46,7 +47,7 @@ def resolve(packages):
         return OCP_WHEEL
 
     result = cadquery_deps.resolve_browser_packages(
-        {"packages": packages}, PYODIDE_LOCK, lookup
+        {"packages": packages}, PYODIDE_LOCK, lookup, "https://cdn.example/pyodide/"
     )
     return result, looked_up
 
@@ -59,8 +60,10 @@ def test_classification():
             pure("cadquery-ocp-proxy", "7.9.3.1.1"),
             native("numpy", "2.5.5"),
             native("scipy", "1.18.1"),
-            # Pure, but Pyodide's build wins (keeps pydantic-core consistent)
+            # Pyodide's builds win (keeps pydantic-core consistent); Pyodide's
+            # pure-Python wheels are bundled so they get precompiled
             pure("pydantic", "2.14.4"),
+            native("pydantic-core", "2.50.5"),
             # Not for the browser
             {**native("pywin32", "311"), "marker": "sys_platform == 'win32'"},
             {**native("numpy", "2.4.0"), "marker": "python_full_version < '3.12'"},
@@ -68,9 +71,13 @@ def test_classification():
     )
     assert looked_up == ["7.9.3.1.1"]
     assert result.ocp_wheel == OCP_WHEEL
-    assert result.pyodide_packages == ["numpy", "pydantic"]
+    assert result.pyodide_packages == ["numpy", "pydantic_core"]
     assert result.deferred_pyodide_packages == ["scipy"]
-    assert [w.filename for w in result.wheels] == ["cadquery-2.8.0-py3-none-any.whl"]
+    assert [w.filename for w in result.wheels] == [
+        "cadquery-2.8.0-py3-none-any.whl",
+        "pydantic-2.12.5-py3-none-any.whl",
+    ]
+    assert result.wheels[1].url == "https://cdn.example/pyodide/pydantic-2.12.5-py3-none-any.whl"
     assert any("pydantic" in w for w in result.warnings)
 
 
