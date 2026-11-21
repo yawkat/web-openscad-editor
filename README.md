@@ -126,8 +126,6 @@ The generator exports the project's lock (`uv export --format pylock.toml`) and 
 - Other packages need a pure-Python wheel; they are bundled into the export, precompiled.
 - VTK, trame and numba are not available in the browser and are replaced by stubs.
 
-To update the dependencies, run `uv lock --upgrade` in the project, or let [Renovate](https://docs.renovatebot.com/modules/manager/pep621/) do it.
-
 ### Model Files
 
 The individual models are defined using the ``[[model]]`` array. The `file` is the only required field.
