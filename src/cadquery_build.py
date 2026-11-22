@@ -1,15 +1,18 @@
 """Build steps for CadQuery models: parameter extraction and the browser runtime."""
 
 import hashlib
+import io
 import json
 import os
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import typing
-import urllib.parse
 import urllib.request
 import zipfile
+
+import zstandard
 
 import cadquery_deps
 
@@ -26,7 +29,13 @@ DEFERRED_INSTALLED_MODULES = [
     "cadquery.occ_impl.importers.dxf",
     "pyparsing.testing",
 ]
+# Bundled distributions that are only downloaded when a model imports them.
+# Only CadQuery's (deferred) DXF modules use them.
+ON_DEMAND_DISTRIBUTIONS = ["ezdxf", "fonttools"]
+# Name of the on-demand download, as reported by lazy_imports.MissingPackages
+ON_DEMAND_DOWNLOAD = "on-demand-packages"
 CACHE_DIR = os.path.join("build", "cadquery")
+ZSTD_LEVEL = 19
 
 
 def extract_schemas(
@@ -106,55 +115,132 @@ def _extract_wheel(wheel_path: str, target: str) -> None:
                 shutil.copyfileobj(src, dst)
 
 
-def build_site_packages(
-    wheels: typing.Sequence[cadquery_deps.Wheel], python_version: str
-) -> bytes:
-    """Bundle pure-Python wheels and the runtime modules into one zip.
+def _bundle(directory: str) -> bytes:
+    """Pack a directory as a zstd-compressed tar archive.
 
-    Everything is byte-compiled for the browser's Python version, with
-    unchecked-hash pycs, so the browser does not compile sources on import.
+    One compressed stream (rather than per-file compression as in a zip)
+    compresses much better. Metadata is fixed, so the bundle (and its hash)
+    is reproducible.
+    """
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for dirpath, dirnames, filenames in os.walk(directory):
+            dirnames.sort()
+            for filename in sorted(filenames):
+                path = os.path.join(dirpath, filename)
+                info = tarfile.TarInfo(os.path.relpath(path, directory).replace(os.sep, "/"))
+                info.size = os.path.getsize(path)
+                info.mode = 0o644
+                with open(path, "rb") as f:
+                    tar.addfile(info, f)
+    compressor = zstandard.ZstdCompressor(level=ZSTD_LEVEL, threads=-1)
+    return compressor.compress(buffer.getvalue())
+
+
+def _compile_sourceless(directories: typing.Sequence[str], python_version: str) -> None:
+    """Byte-compile Python sources next to them, then delete the sources.
+
+    The browser then neither compiles nor downloads sources. Hash-based pycs
+    (unchecked) don't depend on file timestamps.
     """
     major_minor = ".".join(python_version.split(".")[:2])
+    command = [
+        "uv",
+        "run",
+        "--no-project",
+        "--python",
+        major_minor,
+        "python",
+        "-m",
+        "compileall",
+        "-q",
+        "-b",
+        "--invalidation-mode",
+        "unchecked-hash",
+        *directories,
+    ]
+    print("Running:", *command)
+    subprocess.run(command, check=True)
+    for directory in directories:
+        for dirpath, dirnames, filenames in os.walk(directory):
+            if "__pycache__" in dirnames:
+                dirnames.remove("__pycache__")
+                shutil.rmtree(os.path.join(dirpath, "__pycache__"))
+            for filename in filenames:
+                if filename.endswith(".py"):
+                    os.remove(os.path.join(dirpath, filename))
+
+
+def _top_level_modules(directory: str) -> list[str]:
+    modules = set()
+    for name in os.listdir(directory):
+        if os.path.isdir(os.path.join(directory, name)):
+            if not name.endswith((".dist-info", ".data")) and name != "__pycache__":
+                modules.add(name)
+        elif name.endswith((".pyc", ".so")):
+            modules.add(name.split(".")[0])
+    return sorted(modules)
+
+
+class SitePackages(typing.NamedTuple):
+    # Bundle loaded at startup
+    core: bytes
+    # Bundle loaded when one of its modules is imported (None if empty)
+    on_demand: bytes | None
+    on_demand_modules: list[str]
+
+
+def build_site_packages(
+    wheels: typing.Sequence[cadquery_deps.Wheel], python_version: str
+) -> SitePackages:
+    """Bundle the pure-Python wheels and the runtime modules, sourceless.
+
+    Distributions in ON_DEMAND_DISTRIBUTIONS go into a separate bundle.
+    """
     with tempfile.TemporaryDirectory() as tmp:
-        site = os.path.join(tmp, "site")
-        os.makedirs(site)
+        core = os.path.join(tmp, "core")
+        on_demand = os.path.join(tmp, "on-demand")
+        os.makedirs(core)
+        os.makedirs(on_demand)
         for wheel in wheels:
             cached = os.path.join(CACHE_DIR, wheel.filename)
             _download(cached, wheel.url, wheel.sha256)
-            _extract_wheel(cached, site)
+            dist = cadquery_deps.wheel_dist_name(wheel.filename)
+            _extract_wheel(cached, on_demand if dist in ON_DEMAND_DISTRIBUTIONS else core)
         for module in RUNTIME_MODULES:
-            shutil.copyfile(os.path.join(SRC_DIR, module), os.path.join(site, module))
-        command = [
-            "uv",
-            "run",
-            "--no-project",
-            "--python",
-            major_minor,
-            "python",
-            "-m",
-            "compileall",
-            "-q",
-            "--invalidation-mode",
-            "unchecked-hash",
-            site,
-        ]
-        print("Running:", *command)
-        subprocess.run(command, check=True)
+            shutil.copyfile(os.path.join(SRC_DIR, module), os.path.join(core, module))
+        _compile_sourceless([core, on_demand], python_version)
+        modules = _top_level_modules(on_demand)
+        return SitePackages(
+            core=_bundle(core),
+            on_demand=_bundle(on_demand) if modules else None,
+            on_demand_modules=modules,
+        )
 
-        buffer = tempfile.SpooledTemporaryFile()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
-            for dirpath, dirnames, filenames in os.walk(site):
-                dirnames.sort()
-                for filename in sorted(filenames):
-                    path = os.path.join(dirpath, filename)
-                    arcname = os.path.relpath(path, site).replace(os.sep, "/")
-                    # Fixed timestamps keep the bundle (and its hash) reproducible.
-                    info = zipfile.ZipInfo(arcname, date_time=(1980, 1, 1, 0, 0, 0))
-                    info.compress_type = zipfile.ZIP_DEFLATED
-                    with open(path, "rb") as f:
-                        bundle.writestr(info, f.read())
-        buffer.seek(0)
-        return buffer.read()
+
+def _ocp_bundle(wheel: cadquery_deps.Wheel) -> str:
+    """Repack the OCP.wasm wheel as a bundle; return its cached path."""
+    # Keyed by checksum: custom builds may reuse a file name.
+    directory = os.path.join(CACHE_DIR, "ocp", wheel.sha256)
+    bundle = os.path.join(directory, f"ocp-zstd{ZSTD_LEVEL}.tar.zst")
+    if not os.path.exists(bundle):
+        cached_wheel = os.path.join(directory, wheel.filename)
+        _download(cached_wheel, wheel.url, wheel.sha256)
+        print(f"Compressing {wheel.filename}")
+        with tempfile.TemporaryDirectory() as tmp:
+            _extract_wheel(cached_wheel, tmp)
+            data = _bundle(tmp)
+        with open(bundle + ".tmp", "wb") as f:
+            f.write(data)
+        os.replace(bundle + ".tmp", bundle)
+    return bundle
+
+
+def _write_hashed(directory: str, stem: str, data: bytes) -> str:
+    name = f"{stem}.{hashlib.sha256(data).hexdigest()[:12]}.tar.zst"
+    with open(os.path.join(directory, name), "wb") as f:
+        f.write(data)
+    return name
 
 
 def prepare_runtime(
@@ -181,16 +267,15 @@ def prepare_runtime(
         shutil.rmtree(target)
     os.makedirs(target)
 
-    ocp = packages.ocp_wheel
-    # Keyed by checksum: custom builds may reuse a file name.
-    ocp_cached = os.path.join(CACHE_DIR, "ocp", ocp.sha256, ocp.filename)
-    _download(ocp_cached, ocp.url, ocp.sha256)
-    shutil.copyfile(ocp_cached, os.path.join(target, ocp.filename))
-
-    site_packages = build_site_packages(packages.wheels, python_version)
-    site_name = f"site-packages.{hashlib.sha256(site_packages).hexdigest()[:12]}.zip"
-    with open(os.path.join(target, site_name), "wb") as f:
-        f.write(site_packages)
+    with open(_ocp_bundle(packages.ocp_wheel), "rb") as f:
+        ocp_name = _write_hashed(target, "ocp", f.read())
+    site = build_site_packages(packages.wheels, python_version)
+    site_name = _write_hashed(target, "site-packages", site.core)
+    on_demand_name = (
+        None
+        if site.on_demand is None
+        else _write_hashed(target, "site-packages-on-demand", site.on_demand)
+    )
 
     bundled = {cadquery_deps.wheel_dist_name(w.filename) for w in packages.wheels}
     return {
@@ -200,6 +285,9 @@ def prepare_runtime(
         "deferred_installed_modules": [
             m for m in DEFERRED_INSTALLED_MODULES if m.split(".")[0] in bundled
         ],
-        "ocp_wheel_url": f"{output_subdir}/{urllib.parse.quote(ocp.filename)}",
+        "ocp_url": f"{output_subdir}/{ocp_name}",
         "site_packages_url": f"{output_subdir}/{site_name}",
+        "on_demand_url": None if on_demand_name is None else f"{output_subdir}/{on_demand_name}",
+        "on_demand_download": ON_DEMAND_DOWNLOAD,
+        "on_demand_modules": site.on_demand_modules,
     }

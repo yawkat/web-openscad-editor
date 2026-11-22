@@ -12,6 +12,9 @@ use. Three kinds of modules are handled here:
   only loaded when a model needs them (constraint solving, NURBS fitting). The
   first real use raises :class:`MissingPackages`; the worker then loads the
   packages and renders again.
+* **On demand** (ezdxf, fontTools): bundled packages that are only downloaded
+  when imported. Importing them raises :class:`MissingPackages` until the
+  worker has unpacked them.
 
 ``from x import y`` at import time returns a lazy proxy for ``y`` that resolves
 the real object on first use.
@@ -184,6 +187,8 @@ class _Hooks(importlib.abc.MetaPathFinder):
         # prefix -> Pyodide package to load, or None if already installed
         self.deferred: dict[str, str | None] = {}
         self.loaded: set[str] = set()
+        # top-level module -> name of the download that provides it
+        self.on_demand: dict[str, str] = {}
 
     def is_loaded(self, module: str) -> bool:
         prefix = _matches(module, self.deferred)
@@ -206,9 +211,16 @@ class _Hooks(importlib.abc.MetaPathFinder):
                 if package is not None and e.name is not None and _matches(e.name, (prefix,)):
                     raise MissingPackages([package]) from None
                 raise
+            except BaseException:
+                # e.g. MissingPackages for an on-demand module it imports
+                self.loaded.discard(prefix)
+                raise
         return importlib.import_module(module)
 
     def find_spec(self, fullname, path, target=None):
+        download = self.on_demand.get(fullname.partition(".")[0])
+        if download is not None:
+            raise MissingPackages([download])
         prefix = _matches(fullname, self.deferred)
         if prefix is not None and prefix not in self.loaded:
             return importlib.machinery.ModuleSpec(
@@ -228,14 +240,17 @@ def install(
     deferred_installed: typing.Iterable[str] = (),
     deferred_packages: typing.Iterable[str] = (),
     stub_prefixes: typing.Iterable[str] = STUB_PREFIXES,
+    on_demand_modules: typing.Mapping[str, str] | None = None,
 ):
     """Install the import hooks.
 
     ``deferred_installed`` are module names to import lazily, and
     ``deferred_packages`` are Pyodide packages (with the same module name) to
-    load on demand.
+    load on demand. ``on_demand_modules`` maps top-level modules that are not
+    downloaded yet to the name of the download that provides them.
     """
     _hooks.stub_prefixes = tuple(stub_prefixes)
+    _hooks.on_demand.update(on_demand_modules or {})
     for name in deferred_installed:
         _hooks.deferred[name] = None
     for name in deferred_packages:
@@ -243,6 +258,12 @@ def install(
     if _hooks not in sys.meta_path:
         # First, so deferred modules are intercepted before the real finders.
         sys.meta_path.insert(0, _hooks)
+
+
+def mark_downloaded(download: str):
+    """The modules of an on-demand download are available now."""
+    _hooks.on_demand = {m: d for m, d in _hooks.on_demand.items() if d != download}
+    importlib.invalidate_caches()
 
 
 def install_ocp_stubs():

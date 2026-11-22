@@ -8,6 +8,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "datamodel-code-generator>=0.53.0",
     "packaging>=26.0",
+    "zstandard>=0.23",
 ]
 
 [dependency-groups]

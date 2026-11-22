@@ -14,9 +14,13 @@ const PYODIDE_PACKAGES = {{ pyodide_packages | json_dump }}
 const DEFERRED_PACKAGES = {{ deferred_packages | json_dump }}
 // Bundled modules that are imported on first use
 const DEFERRED_INSTALLED_MODULES = {{ deferred_installed_modules | json_dump }}
-// OCP.wasm (OpenCascade) wheel, and the precompiled pure-Python packages
-const OCP_WHEEL_URL = new URL({{ ocp_wheel_url | json_dump }}, self.location.href).href
+// OCP.wasm (OpenCascade), and the precompiled pure-Python packages
+const OCP_URL = new URL({{ ocp_url | json_dump }}, self.location.href).href
 const SITE_PACKAGES_URL = new URL({{ site_packages_url | json_dump }}, self.location.href).href
+// Packages that are only downloaded when a model imports them (e.g. ezdxf)
+const ON_DEMAND_URL = {% if on_demand_url %}new URL({{ on_demand_url | json_dump }}, self.location.href).href{% else %}null{% endif %}
+const ON_DEMAND_DOWNLOAD = {{ on_demand_download | json_dump }}
+const ON_DEMAND_MODULES = {{ on_demand_modules | json_dump }}
 const TOLERANCE = {{ config.cadquery.tolerance | json_dump }}
 const ANGULAR_TOLERANCE = {{ config.cadquery.angular_tolerance | json_dump }}
 // Used for parts without a color when other parts have one (OpenSCAD's default).
@@ -30,7 +34,8 @@ INPUT_FILES.set({{ virtual_path | json_dump }}, `./{{ fs_cas_dir }}/{{ digest }}
 let runQueue = Promise.resolve()
 let runtimePromise = null
 let runtimeReady = false
-let deferredPackagesLoaded = false
+// Deferred Pyodide packages and on-demand downloads that were loaded
+const loadedOnDemand = new Set()
 
 function progress(message) {
     logInfo(message)
@@ -65,7 +70,7 @@ const helperResults = new Map()
 
 /**
  * Download and unpack a runtime file (OCP compiled to a WebAssembly.Module, or
- * site-packages) in a helper worker, so that it runs in parallel with
+ * a site-packages bundle) in a helper worker, so that it runs in parallel with
  * Pyodide's startup instead of competing with it on this thread.
  *
  * The page starts the helper (see rendering.js) and forwards the result,
@@ -113,9 +118,9 @@ async function linkPrecompiled(pyodide, path, module) {
 async function initRuntime() {
     const start = performance.now()
     progress("Loading Python runtime…")
-    // Downloads and unzipping run in parallel with Pyodide's startup.
-    const ocpPromise = timed("download, unzip and compile OCP (helper)", () => prepareInHelper("ocp", OCP_WHEEL_URL))
-    const sitePromise = timed("download and unzip site-packages (helper)", () => prepareInHelper("site-packages", SITE_PACKAGES_URL))
+    // Downloads and unpacking run in parallel with Pyodide's startup.
+    const ocpPromise = timed("download, decompress and compile OCP (helper)", () => prepareInHelper("ocp", OCP_URL))
+    const sitePromise = timed("download and unpack site-packages (helper)", () => prepareInHelper("site-packages", SITE_PACKAGES_URL))
     const inputFilesPromise = Promise.all(
         Array.from(INPUT_FILES.entries()).map(async ([path, url]) => [path, await fetchBytes(url)]),
     )
@@ -150,6 +155,8 @@ import lazy_imports
 lazy_imports.install(
     deferred_installed=${JSON.stringify(DEFERRED_INSTALLED_MODULES)},
     deferred_packages=${JSON.stringify(DEFERRED_PACKAGES)},
+    on_demand_modules=${JSON.stringify(Object.fromEntries(
+        ON_DEMAND_URL ? ON_DEMAND_MODULES.map((m) => [m, ON_DEMAND_DOWNLOAD]) : []))},
 )
 lazy_imports.install_ocp_stubs()
 import cadquery
@@ -160,12 +167,38 @@ import cadquery
     return { pyodide, runner }
 }
 
-async function loadDeferredPackages(pyodide, packages) {
-    progress(`Loading ${packages.join(", ")}…`)
-    await timed(`load ${packages.join(", ")}`, () =>
-        pyodide.loadPackage(DEFERRED_PACKAGES, { messageCallback: logInfo, errorCallback: logError }))
+/**
+ * Load what a model needs but isn't loaded yet: deferred Pyodide packages and
+ * the on-demand site-packages bundle.
+ */
+async function loadMissing(pyodide, missing) {
+    const unknown = missing.filter((name) =>
+        loadedOnDemand.has(name) || !(DEFERRED_PACKAGES.includes(name) || (name === ON_DEMAND_DOWNLOAD && ON_DEMAND_URL)))
+    if (unknown.length) {
+        throw new Error(`Packages could not be loaded: ${unknown.join(", ")}`)
+    }
+    const packages = missing.filter((name) => DEFERRED_PACKAGES.includes(name))
+    if (packages.length) {
+        // All of them: they depend on each other, and loading them one by one
+        // could take a retry each.
+        const all = DEFERRED_PACKAGES.filter((name) => !loadedOnDemand.has(name))
+        progress(`Loading ${all.join(", ")}…`)
+        await timed(`load ${all.join(", ")}`, () =>
+            pyodide.loadPackage(all, { messageCallback: logInfo, errorCallback: logError }))
+        all.forEach((name) => loadedOnDemand.add(name))
+    }
+    if (missing.includes(ON_DEMAND_DOWNLOAD)) {
+        progress(`Loading ${ON_DEMAND_MODULES.join(", ")}…`)
+        const files = await timed(`download and unpack ${ON_DEMAND_MODULES.join(", ")}`, () =>
+            prepareInHelper(ON_DEMAND_DOWNLOAD, ON_DEMAND_URL))
+        const sitePackages = pyodide.runPython("import sysconfig; sysconfig.get_paths()['purelib']")
+        for (const file of files) {
+            writeFile(pyodide, `${sitePackages}/${file.name}`, file.data)
+        }
+        pyodide.pyimport("lazy_imports").mark_downloaded(ON_DEMAND_DOWNLOAD)
+        loadedOnDemand.add(ON_DEMAND_DOWNLOAD)
+    }
     pyodide.runPython("import importlib; importlib.invalidate_caches()")
-    deferredPackagesLoaded = true
 }
 
 async function getRuntime() {
@@ -248,7 +281,7 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
     const start = performance.now()
     let timings = {}
     let parts = null
-    for (let attempt = 0; parts === null; attempt++) {
+    while (parts === null) {
         const pyParams = pyodide.toPy(params)
         let result
         try {
@@ -260,10 +293,9 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
             const converted = result.toJs({ dict_converter: Object.fromEntries })
             if (converted.missing) {
                 // The model needs packages that are only loaded on demand.
-                if (deferredPackagesLoaded || attempt > 0) {
-                    throw new Error(`Packages could not be loaded: ${converted.missing.join(", ")}`)
-                }
-                await loadDeferredPackages(pyodide, converted.missing)
+                // loadMissing throws for anything already loaded, so this
+                // retries at most once per download.
+                await loadMissing(pyodide, converted.missing)
                 progress("Rendering…")
                 continue
             }

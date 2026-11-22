@@ -179,7 +179,7 @@ def render(
 
     Returns ``{"parts": [...]}`` where each part is ``{"name", "color",
     "stl"}`` and ``stl`` is the part's mesh as binary STL. Returns
-    ``{"missing": [...]}`` instead if the model needs Pyodide packages that
+    ``{"missing": [...]}`` instead if the model needs packages that
     are not loaded yet.
     """
     import time
