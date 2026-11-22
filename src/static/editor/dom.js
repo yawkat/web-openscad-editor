@@ -22,5 +22,8 @@ export function getDomRefs() {
         renderErrorCopy: document.getElementById("render-error-copy"),
         modelViewer: document.getElementById("model"),
         modelLoadingOverlay: document.getElementById("model-loading-overlay"),
+        modelLoadingBox: document.getElementById("model-loading-box"),
+        modelLoadingSpinner: document.getElementById("model-loading-spinner"),
+        modelLoadingBar: document.getElementById("model-loading-bar"),
     };
 }

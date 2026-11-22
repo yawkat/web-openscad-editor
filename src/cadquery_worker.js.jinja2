@@ -40,9 +40,32 @@ let runtimeReady = false
 // Deferred Pyodide packages and on-demand downloads that were loaded
 const loadedOnDemand = new Set()
 
-function progress(message) {
+// Steps of the first render, for the progress bar: the fraction of the bar
+// where each starts and its typical duration in seconds. The durations are
+// rough (import OCP takes about 5 s in Chrome, 1 s in Firefox); the bar eases
+// towards the next step's start and jumps ahead when the step is done early.
+const FIRST_RENDER_STEPS = {
+    pyodide: { start: 0, seconds: 3 },
+    ocp: { start: 0.3, seconds: 0.3 },
+    ocpInit: { start: 0.35, seconds: 4 },
+    cadquery: { start: 0.8, seconds: 1.2 },
+    render: { start: 0.92, seconds: 1 },
+}
+let firstRenderDone = false
+
+/**
+ * Report progress. With a step of FIRST_RENDER_STEPS (only during the first
+ * render), the page shows a progress bar.
+ */
+function progress(message, step = null) {
     logInfo(message)
-    self.postMessage({ type: "progress", message })
+    let bar = null
+    if (step && !firstRenderDone) {
+        const names = Object.keys(FIRST_RENDER_STEPS)
+        const next = FIRST_RENDER_STEPS[names[names.indexOf(step) + 1]]
+        bar = { from: FIRST_RENDER_STEPS[step].start, to: next ? next.start : 1, seconds: FIRST_RENDER_STEPS[step].seconds }
+    }
+    self.postMessage({ type: "progress", message, bar })
 }
 
 async function fetchBytes(url) {
@@ -120,7 +143,7 @@ async function linkPrecompiled(pyodide, path, module) {
 
 async function initRuntime() {
     const start = performance.now()
-    progress("Loading Python runtime…")
+    progress("Loading Python runtime…", "pyodide")
     // Downloads and unpacking run in parallel with Pyodide's startup.
     const ocpPromise = timed("download, decompress and compile OCP (helper)", () => prepareInHelper("ocp", OCP_URL))
     const sitePromise = timed("download and unpack site-packages (helper)", () => prepareInHelper("site-packages", SITE_PACKAGES_URL))
@@ -136,13 +159,13 @@ async function initRuntime() {
     }))
     const sitePackages = pyodide.runPython("import sysconfig; sysconfig.get_paths()['purelib']")
 
-    progress("Loading OpenCascade…")
+    progress("Loading OpenCascade…", "ocp")
     const ocp = await ocpPromise
     for (const file of ocp.files) {
         writeFile(pyodide, `${sitePackages}/${file.name}`, file.data)
     }
     await timed("link OCP", () => linkPrecompiled(pyodide, `${sitePackages}/${ocp.libraryName}`, ocp.module))
-    progress("Initializing OpenCascade…")
+    progress("Initializing OpenCascade…", "ocpInit")
     await timed("import OCP", () => pyodide.runPython("import OCP"))
 
     for (const entry of await sitePromise) {
@@ -152,7 +175,7 @@ async function initRuntime() {
         writeFile(pyodide, MODEL_ROOT + path, bytes)
     }
 
-    progress("Loading CadQuery…")
+    progress("Loading CadQuery…", "cadquery")
     await timed("import cadquery", () => pyodide.runPython(`
 import lazy_imports
 lazy_imports.install(
@@ -292,7 +315,7 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
     }
     const params = { ...normalParams, ...additionalParams }
     logInfo("Parameters:", params)
-    progress("Rendering…")
+    progress("Rendering…", "render")
 
     const start = performance.now()
     let timings = {}
@@ -312,7 +335,7 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
                 // loadMissing throws for anything already loaded, so this
                 // retries at most once per download.
                 await loadMissing(pyodide, runner, converted.missing)
-                progress("Rendering…")
+                progress("Rendering…", "render")
                 continue
             }
             timings = converted.timings
@@ -382,6 +405,8 @@ self.addEventListener("message", (event) => {
                 await render(msg)
             } catch (e) {
                 postError(e)
+            } finally {
+                firstRenderDone = true
             }
         } else if (msg.type === "export") {
             try {

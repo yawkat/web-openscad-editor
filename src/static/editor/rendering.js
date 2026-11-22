@@ -63,12 +63,38 @@ function showRenderError(dom, { summary, log }) {
     setRenderErrorVisible(dom, true);
 }
 
-function setProgress(dom, message) {
+/**
+ * Show a progress message on the model. With `bar` ({from, to, seconds}, sent
+ * by the CadQuery worker during the first render), a progress bar replaces
+ * the spinner: it starts at `from` and eases towards `to` over the step's
+ * expected duration. Without `bar`, the bar (if shown) keeps its position.
+ */
+function setProgress(dom, message, bar = null) {
     if (!dom.renderProgress) {
         return;
     }
     dom.renderProgress.textContent = message || "";
     dom.renderProgress.classList.toggle("d-none", !message);
+    dom.modelLoadingBox.classList.toggle("has-text", !!message);
+    if (!message) {
+        dom.modelLoadingBar.classList.add("d-none");
+        dom.modelLoadingSpinner.classList.remove("d-none");
+        return;
+    }
+    if (!bar) {
+        return;
+    }
+    dom.modelLoadingSpinner.classList.add("d-none");
+    dom.modelLoadingBar.classList.remove("d-none");
+    dom.modelLoadingBar.setAttribute("aria-valuenow", String(Math.round(bar.from * 100)));
+    const fill = dom.modelLoadingBar.firstElementChild;
+    fill.style.transition = "none";
+    fill.style.width = `${bar.from * 100}%`;
+    // Apply the start position before animating from it
+    fill.getBoundingClientRect();
+    // Stop short of the next step, which jumps to its own start
+    fill.style.transition = `width ${bar.seconds}s ease-out`;
+    fill.style.width = `${(bar.from + 0.9 * (bar.to - bar.from)) * 100}%`;
 }
 
 // ── export file naming ───────────────────────────────────────────────
@@ -238,7 +264,10 @@ export function createRenderer({
             // The CadQuery runtime starts loading before the first render
             // starts, so show progress regardless of the render state. It is
             // cleared when the render finishes.
-            setProgress(dom, event.data.message);
+            setProgress(dom, event.data.message, event.data.bar);
+            if (event.data.bar && dom.modelLoadingOverlay) {
+                dom.modelLoadingOverlay.classList.remove("d-none");
+            }
             return;
         }
         if (event.data.type === "export-ok") {

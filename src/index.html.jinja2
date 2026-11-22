@@ -61,6 +61,28 @@
             pointer-events: none;
             z-index: 10;
         }
+
+        #model-loading-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            max-width: calc(100% - 2rem);
+            padding: 0.75rem 1rem;
+            border-radius: var(--bs-border-radius-lg);
+            text-align: center;
+        }
+
+        /* Readable on top of the model */
+        #model-loading-box.has-text {
+            background: rgba(var(--bs-body-bg-rgb), 0.85);
+            box-shadow: var(--bs-box-shadow-sm);
+        }
+
+        #model-loading-bar {
+            width: 20rem;
+            max-width: 100%;
+        }
         @media only screen and (max-width: 992px) {
             body {
                 display: block;
@@ -203,8 +225,15 @@
     <!-- the environment image disables the default lighting -->
     <model-viewer id="model" camera-controls interaction-prompt="none" orientation="0deg -90deg 0deg"
                   environment-image="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAIABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJVAA//Z"></model-viewer>
-    <div id="model-loading-overlay" class="d-none" aria-hidden="true">
-        <span class="spinner-border" aria-hidden="true"></span>
+    <div id="model-loading-overlay" class="d-none">
+        <div id="model-loading-box">
+            <span id="model-loading-spinner" class="spinner-border" aria-hidden="true"></span>
+            <div id="model-loading-bar" class="progress d-none" role="progressbar" aria-label="Loading"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-bar"></div>
+            </div>
+            <div id="render-progress" class="small text-body-secondary d-none" aria-live="polite"></div>
+        </div>
     </div>
     <div id="controls">
         <button id="render" type="button" class="btn btn-secondary">Render<span id="render-state" class="d-none">ing… <span
@@ -219,7 +248,6 @@
         <button id="download-step" type="button" class="btn btn-primary" title="Save as STEP (exact CAD geometry, with part names and colors)">Save STEP<span id="download-step-state" class="d-none"> <span
                 class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></button>
         {% endif %}
-        <div id="render-progress" class="small text-body-secondary mt-1 d-none" aria-live="polite"></div>
         <div id="render-error" class="alert alert-danger mt-2 d-none" role="alert">
             <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
                 <div>
