@@ -34,6 +34,8 @@ DEFERRED_INSTALLED_MODULES = [
 ON_DEMAND_DISTRIBUTIONS = ["ezdxf", "fonttools"]
 # Name of the on-demand download, as reported by lazy_imports.MissingPackages
 ON_DEMAND_DOWNLOAD = "on-demand-packages"
+# Name of the font download (see cadquery_runner.install_font_hook)
+FONTS_DOWNLOAD = "fonts"
 CACHE_DIR = os.path.join("build", "cadquery")
 ZSTD_LEVEL = 19
 
@@ -249,10 +251,12 @@ def prepare_runtime(
     output_dir: str,
     output_subdir: str,
     ocp_wheel: cadquery_deps.Wheel | None = None,
+    fonts: typing.Mapping[str, bytes] | None = None,
 ) -> dict[str, typing.Any]:
     """Resolve and bundle the browser runtime; return worker template variables.
 
-    ``ocp_wheel`` replaces the OCP.wasm release from PyPI.
+    ``ocp_wheel`` replaces the OCP.wasm release from PyPI. ``fonts`` (file
+    name to content) are downloaded when a model first looks up a font.
     """
     pyodide_lock = load_pyodide_lock(pyodide_version)
     python_version = pyodide_lock["info"]["python"]
@@ -277,6 +281,14 @@ def prepare_runtime(
         else _write_hashed(target, "site-packages-on-demand", site.on_demand)
     )
 
+    fonts_name = None
+    if fonts:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, data in fonts.items():
+                with open(os.path.join(tmp, name), "wb") as f:
+                    f.write(data)
+            fonts_name = _write_hashed(target, "fonts", _bundle(tmp))
+
     bundled = {cadquery_deps.wheel_dist_name(w.filename) for w in packages.wheels}
     return {
         "pyodide_version": pyodide_version,
@@ -290,4 +302,6 @@ def prepare_runtime(
         "on_demand_url": None if on_demand_name is None else f"{output_subdir}/{on_demand_name}",
         "on_demand_download": ON_DEMAND_DOWNLOAD,
         "on_demand_modules": site.on_demand_modules,
+        "fonts_url": None if fonts_name is None else f"{output_subdir}/{fonts_name}",
+        "fonts_download": FONTS_DOWNLOAD,
     }

@@ -21,6 +21,9 @@ const SITE_PACKAGES_URL = new URL({{ site_packages_url | json_dump }}, self.loca
 const ON_DEMAND_URL = {% if on_demand_url %}new URL({{ on_demand_url | json_dump }}, self.location.href).href{% else %}null{% endif %}
 const ON_DEMAND_DOWNLOAD = {{ on_demand_download | json_dump }}
 const ON_DEMAND_MODULES = {{ on_demand_modules | json_dump }}
+// Fonts for text(), downloaded when a model first looks up a font
+const FONTS_URL = {% if fonts_url %}new URL({{ fonts_url | json_dump }}, self.location.href).href{% else %}null{% endif %}
+const FONTS_DOWNLOAD = {{ fonts_download | json_dump }}
 const TOLERANCE = {{ config.cadquery.tolerance | json_dump }}
 const ANGULAR_TOLERANCE = {{ config.cadquery.angular_tolerance | json_dump }}
 // Used for parts without a color when other parts have one (OpenSCAD's default).
@@ -162,18 +165,31 @@ lazy_imports.install_ocp_stubs()
 import cadquery
 `))
     const runner = pyodide.pyimport("cadquery_runner")
+    if (FONTS_URL) {
+        runner.install_font_hook(FONTS_DOWNLOAD)
+    }
     logInfo(`[load] total: ${((performance.now() - start) / 1000).toFixed(2)}s`)
     runtimeReady = true
     return { pyodide, runner }
 }
 
+/** Download a bundle and write its files below a directory. */
+async function loadBundle(pyodide, name, url, directory, label) {
+    progress(`Loading ${label}…`)
+    const files = await timed(`download and unpack ${label}`, () => prepareInHelper(name, url))
+    for (const file of files) {
+        writeFile(pyodide, `${directory}/${file.name}`, file.data)
+    }
+}
+
 /**
- * Load what a model needs but isn't loaded yet: deferred Pyodide packages and
- * the on-demand site-packages bundle.
+ * Load what a model needs but isn't loaded yet: deferred Pyodide packages, the
+ * on-demand site-packages bundle and fonts.
  */
-async function loadMissing(pyodide, missing) {
-    const unknown = missing.filter((name) =>
-        loadedOnDemand.has(name) || !(DEFERRED_PACKAGES.includes(name) || (name === ON_DEMAND_DOWNLOAD && ON_DEMAND_URL)))
+async function loadMissing(pyodide, runner, missing) {
+    const known = (name) => DEFERRED_PACKAGES.includes(name) ||
+        (name === ON_DEMAND_DOWNLOAD && ON_DEMAND_URL) || (name === FONTS_DOWNLOAD && FONTS_URL)
+    const unknown = missing.filter((name) => loadedOnDemand.has(name) || !known(name))
     if (unknown.length) {
         throw new Error(`Packages could not be loaded: ${unknown.join(", ")}`)
     }
@@ -188,15 +204,15 @@ async function loadMissing(pyodide, missing) {
         all.forEach((name) => loadedOnDemand.add(name))
     }
     if (missing.includes(ON_DEMAND_DOWNLOAD)) {
-        progress(`Loading ${ON_DEMAND_MODULES.join(", ")}…`)
-        const files = await timed(`download and unpack ${ON_DEMAND_MODULES.join(", ")}`, () =>
-            prepareInHelper(ON_DEMAND_DOWNLOAD, ON_DEMAND_URL))
         const sitePackages = pyodide.runPython("import sysconfig; sysconfig.get_paths()['purelib']")
-        for (const file of files) {
-            writeFile(pyodide, `${sitePackages}/${file.name}`, file.data)
-        }
+        await loadBundle(pyodide, ON_DEMAND_DOWNLOAD, ON_DEMAND_URL, sitePackages, ON_DEMAND_MODULES.join(", "))
         pyodide.pyimport("lazy_imports").mark_downloaded(ON_DEMAND_DOWNLOAD)
         loadedOnDemand.add(ON_DEMAND_DOWNLOAD)
+    }
+    if (missing.includes(FONTS_DOWNLOAD)) {
+        await loadBundle(pyodide, FONTS_DOWNLOAD, FONTS_URL, runner.FONT_DIR, "fonts")
+        runner.fonts_downloaded()
+        loadedOnDemand.add(FONTS_DOWNLOAD)
     }
     pyodide.runPython("import importlib; importlib.invalidate_caches()")
 }
@@ -295,7 +311,7 @@ async function render({ input, normalParams, additionalParams, previewStyle }) {
                 // The model needs packages that are only loaded on demand.
                 // loadMissing throws for anything already loaded, so this
                 // retries at most once per download.
-                await loadMissing(pyodide, converted.missing)
+                await loadMissing(pyodide, runner, converted.missing)
                 progress("Rendering…")
                 continue
             }

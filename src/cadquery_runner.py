@@ -239,3 +239,57 @@ def export_step(output_path: str) -> None:
     cq.Assembly(name=DEFAULT_PART_NAME).add(shape, name=DEFAULT_PART_NAME).export(
         output_path, "STEP"
     )
+
+
+# Directory the worker writes the font download to. OpenCascade's font manager
+# scans /usr/share/fonts (recursively) when it is initialized.
+FONT_DIR = "/usr/share/fonts/editor"
+# OpenSCAD's default fonts (Liberation) are metric-compatible with Arial, Times
+# New Roman and Courier New. OpenCascade's alias groups are shared between
+# names, so adding to "sans" also covers "arial", "helvetica" and "sans-serif"
+# (CadQuery's default font is "Arial"). AddFontAlias refuses to add to an
+# alias whose group lists the alias name itself (e.g. "arial", "times"), so
+# use the group names.
+FONT_ALIASES = {
+    "sans": "liberation sans",
+    "serif": "liberation serif",
+    "mono": "liberation mono",
+    "times new roman": "liberation serif",
+    "courier new": "liberation mono",
+}
+_font_hook: dict[str, typing.Any] = {}
+
+
+def install_font_hook(download: str) -> None:
+    """Request the font download on the first use of the font manager.
+
+    Until :func:`fonts_downloaded` is called, ``Font_FontMgr.GetInstance_s()``
+    (used by CadQuery's text functions) raises
+    :class:`lazy_imports.MissingPackages`, so the worker downloads the fonts
+    and renders again.
+    """
+    import lazy_imports
+    from OCP.Font import Font_FontMgr
+
+    original = Font_FontMgr.GetInstance_s
+
+    def get_instance():
+        raise lazy_imports.MissingPackages([download])
+
+    _font_hook["original"] = original
+    Font_FontMgr.GetInstance_s = staticmethod(get_instance)
+
+
+def fonts_downloaded() -> None:
+    """The fonts are in FONT_DIR now; restore and initialize the font manager."""
+    from OCP.Font import Font_FontMgr
+    from OCP.TCollection import TCollection_AsciiString
+
+    original = _font_hook.pop("original", None)
+    if original is not None:
+        Font_FontMgr.GetInstance_s = staticmethod(original)
+    manager = Font_FontMgr.GetInstance_s()
+    # Rescan, in case the manager was initialized before the fonts existed.
+    manager.InitFontDataBase()
+    for alias, font in FONT_ALIASES.items():
+        manager.AddFontAlias(TCollection_AsciiString(alias), TCollection_AsciiString(font))

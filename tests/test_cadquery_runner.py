@@ -71,3 +71,44 @@ def test_nest():
         "a": 1,
         "b": {"c": 2, "d": {"e": 3}},
     }
+
+
+def test_font_hook(monkeypatch):
+    import sys
+    import types
+
+    import lazy_imports
+
+    calls = []
+
+    class Manager:
+        def InitFontDataBase(self):
+            calls.append("init")
+
+        def AddFontAlias(self, alias, font):
+            calls.append((alias, font))
+
+    manager = Manager()
+
+    class Font_FontMgr:
+        @staticmethod
+        def GetInstance_s():
+            return manager
+
+    font_module = types.ModuleType("OCP.Font")
+    font_module.Font_FontMgr = Font_FontMgr
+    tcollection = types.ModuleType("OCP.TCollection")
+    tcollection.TCollection_AsciiString = str
+    monkeypatch.setitem(sys.modules, "OCP", types.ModuleType("OCP"))
+    monkeypatch.setitem(sys.modules, "OCP.Font", font_module)
+    monkeypatch.setitem(sys.modules, "OCP.TCollection", tcollection)
+
+    cadquery_runner.install_font_hook("fonts")
+    with pytest.raises(lazy_imports.MissingPackages) as e:
+        Font_FontMgr.GetInstance_s()
+    assert e.value.packages == ["fonts"]
+
+    cadquery_runner.fonts_downloaded()
+    assert Font_FontMgr.GetInstance_s() is manager
+    assert calls[0] == "init"
+    assert ("sans", "liberation sans") in calls

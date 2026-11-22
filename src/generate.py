@@ -1,5 +1,6 @@
 import argparse
 import ast
+import functools
 import os
 import tempfile
 import typing
@@ -89,6 +90,8 @@ def main():
     uses_openscad = config_generated.Runtime.openscad in runtimes
     uses_cadquery = config_generated.Runtime.cadquery in runtimes
 
+    font_source = _font_source(config.openscad.font_source)
+
     library_roots: typing.Dict[str, str] = {}
     library_include_paths: list[str] = []
     if uses_openscad:
@@ -99,6 +102,8 @@ def main():
             + "-WebAssembly-web.zip",
             config.openscad.sha256_wasm_web,
         )
+    # The AppImage is also the default source of fonts for CadQuery's text().
+    if uses_openscad or (uses_cadquery and font_source != "system"):
         download(
             "build/openscad.AppImage",
             "https://files.openscad.org/snapshots/OpenSCAD-"
@@ -107,7 +112,7 @@ def main():
             config.openscad.sha256_appimage,
         )
         os.chmod("build/openscad.AppImage", 0o755)
-
+    if uses_openscad:
         library_roots, library_include_paths = ensure_scad_libraries(
             config.openscad.libraries
         )
@@ -201,7 +206,7 @@ def main():
     if uses_openscad:
         try:
             add_default_fonts(
-                config.openscad.font_source,
+                font_source,
                 fs_by_runtime[config_generated.Runtime.openscad],
             )
         except Exception as e:
@@ -276,6 +281,11 @@ def main():
             },
         )
     if uses_cadquery:
+        try:
+            cadquery_fonts = default_fonts(font_source)
+        except Exception as e:
+            print(f"Warning: failed to bundle fonts for CadQuery: {e}")
+            cadquery_fonts = {}
         ocp_wheel = config.cadquery.ocp_wheel
         runtime_variables = cadquery_build.prepare_runtime(
             cadquery_project,
@@ -285,6 +295,7 @@ def main():
             None
             if ocp_wheel is None
             else cadquery_deps.custom_wheel(ocp_wheel.url, ocp_wheel.sha256),
+            cadquery_fonts,
         )
         worker_script_names[config_generated.Runtime.cadquery] = write_worker(
             j2env,
@@ -703,7 +714,14 @@ def load_python_recursively(
         load_python_recursively(dependency, root, fs, search_dir)
 
 
-def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):
+def _font_source(value) -> str:
+    """The configured font source as a string ("auto" if unset)."""
+    value = getattr(value, "value", value) or "auto"
+    return value if value in {"auto", "appimage", "system"} else "auto"
+
+
+def add_default_fonts(font_source: str, fs: typing.Dict[str, bytes]):
+    """Add the default fonts and a fontconfig config (for OpenSCAD) below /fonts."""
     # Provide a minimal fontconfig config file.
     # This is intentionally tiny (the heavy lifting is the font files).
     if "/fonts/fonts.conf" not in fs:
@@ -715,10 +733,14 @@ def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):
             b"  <cachedir>/tmp/fontconfig</cachedir>\n"
             b"</fontconfig>\n"
         )
+    for name, data in default_fonts(font_source).items():
+        fs["/fonts/" + name] = data
 
-    if font_source not in {"auto", "appimage", "system"}:
-        font_source = "auto"
 
+@functools.lru_cache
+def default_fonts(font_source: str) -> typing.Dict[str, bytes]:
+    """The default fonts, as {file name: content}."""
+    fs: typing.Dict[str, bytes] = {}
     # Default behavior:
     # - GitHub Action/CI: use the AppImage bundled with the action.
     # - Local runs: you can set OPENSCAD_FONT_SOURCE=system to embed
@@ -726,12 +748,13 @@ def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):
     if font_source in {"auto", "appimage"}:
         try:
             add_fonts_from_appimage(fs)
-            return
+            return {k.removeprefix("/fonts/"): v for k, v in fs.items()}
         except Exception:
             if font_source == "appimage":
                 raise
 
     add_fonts_from_system(fs)
+    return {k.removeprefix("/fonts/"): v for k, v in fs.items()}
 
 
 def _collect_font_candidates(root: str) -> typing.List[str]:
@@ -823,7 +846,8 @@ def add_fonts_from_appimage(fs: typing.Dict[str, bytes]):
 
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(
-            [appimage_path, "--appimage-extract"],
+            # Absolute: the extraction runs in the temporary directory.
+            [os.path.abspath(appimage_path), "--appimage-extract"],
             check=True,
             cwd=tmp,
             stdout=subprocess.DEVNULL,
@@ -836,6 +860,8 @@ def add_fonts_from_appimage(fs: typing.Dict[str, bytes]):
         candidates: typing.List[str] = []
         for base in [
             os.path.join(squashfs_root, "usr", "share", "fonts"),
+            # Where OpenSCAD's AppImage keeps its Liberation fonts
+            os.path.join(squashfs_root, "usr", "share", "openscad", "fonts"),
             os.path.join(squashfs_root, "usr", "local", "share", "fonts"),
             os.path.join(squashfs_root, "usr", "lib", "fonts"),
         ]:
