@@ -77,6 +77,11 @@ class Openscad(BaseModel):
     )
 
 
+class OcpBuild(Enum):
+    pypi = 'pypi'
+    minimal = 'minimal'
+
+
 class OcpWheel(BaseModel):
     model_config = ConfigDict(
         extra='forbid',
@@ -84,37 +89,6 @@ class OcpWheel(BaseModel):
     url: str = Field(..., description='URL of the wheel')
     sha256: str = Field(
         ..., description='SHA256 checksum of the wheel', pattern='^[0-9a-fA-F]{64}$'
-    )
-
-
-class Cadquery(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    tolerance: float | None = Field(
-        0.1,
-        description='Linear tessellation tolerance (mm) used for the preview and STL export',
-        gt=0.0,
-    )
-    angular_tolerance: float | None = Field(
-        0.2,
-        alias='angular-tolerance',
-        description='Angular tessellation tolerance (radians) used for the preview and STL export',
-        gt=0.0,
-    )
-    project: str | None = Field(
-        '.',
-        description='Directory of the uv project (pyproject.toml and uv.lock) that declares the dependencies of the CadQuery models, relative to the configuration file',
-    )
-    pyodide_version: str | None = Field(
-        '314.0.8',
-        alias='pyodide-version',
-        description='Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI.',
-    )
-    ocp_wheel: OcpWheel | None = Field(
-        None,
-        alias='ocp-wheel',
-        description='Use this OCP.wasm wheel instead of the matching cadquery-ocp-novtk-OCP.wasm release from PyPI, e.g. a smaller CadQuery-only build',
     )
 
 
@@ -239,6 +213,37 @@ class ModelConfig(BaseModel):
         None,
         alias='umami-track-export',
         description='List of model parameter names to track when model is exported (STL or STEP download). Set to null (default) to disable tracking, or [] to track with no parameters.',
+    )
+
+
+class Cadquery(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    tolerance: float | None = Field(
+        0.1,
+        description='Linear tessellation tolerance (mm) used for the preview and STL export',
+        gt=0.0,
+    )
+    angular_tolerance: float | None = Field(
+        0.2,
+        alias='angular-tolerance',
+        description='Angular tessellation tolerance (radians) used for the preview and STL export',
+        gt=0.0,
+    )
+    project: str | None = Field(
+        '.',
+        description='Directory of the uv project (pyproject.toml and uv.lock) that declares the dependencies of the CadQuery models, relative to the configuration file',
+    )
+    pyodide_version: str | None = Field(
+        '314.0.8',
+        alias='pyodide-version',
+        description='Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI.',
+    )
+    ocp_wheel: OcpBuild | OcpWheel | None = Field(
+        'pypi',
+        alias='ocp-wheel',
+        description='OCP.wasm (OpenCascade) build to use: "pypi" for the cadquery-ocp-novtk-OCP.wasm release from PyPI matching the locked cadquery-ocp, "minimal" for the smaller and faster build from yawkat/ocp-wasm-cadquery matching the locked cadquery-ocp and cadquery (the build fails if there is none), or a specific wheel',
     )
 
 

@@ -292,9 +292,10 @@ def main():
             config.cadquery.pyodide_version or "314.0.8",
             args.output,
             "cadquery",
-            None
-            if ocp_wheel is None
-            else cadquery_deps.custom_wheel(ocp_wheel.url, ocp_wheel.sha256),
+            cadquery_deps.custom_wheel(ocp_wheel.url, ocp_wheel.sha256)
+            if isinstance(ocp_wheel, config_generated.OcpWheel)
+            # The default is the plain string, not the enum member
+            else config_generated.OcpBuild(ocp_wheel or "pypi").value,
             cadquery_fonts,
         )
         worker_script_names[config_generated.Runtime.cadquery] = write_worker(

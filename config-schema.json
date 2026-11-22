@@ -114,22 +114,12 @@
           "description": "Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI."
         },
         "ocp-wheel": {
-          "type": ["object", "null"],
-          "default": null,
-          "description": "Use this OCP.wasm wheel instead of the matching cadquery-ocp-novtk-OCP.wasm release from PyPI, e.g. a smaller CadQuery-only build",
-          "required": ["url", "sha256"],
-          "properties": {
-            "url": {
-              "type": "string",
-              "description": "URL of the wheel"
-            },
-            "sha256": {
-              "type": "string",
-              "description": "SHA256 checksum of the wheel",
-              "pattern": "^[0-9a-fA-F]{64}$"
-            }
-          },
-          "additionalProperties": false
+          "default": "pypi",
+          "description": "OCP.wasm (OpenCascade) build to use: \"pypi\" for the cadquery-ocp-novtk-OCP.wasm release from PyPI matching the locked cadquery-ocp, \"minimal\" for the smaller and faster build from yawkat/ocp-wasm-cadquery matching the locked cadquery-ocp and cadquery (the build fails if there is none), or a specific wheel",
+          "oneOf": [
+            { "$ref": "#/$defs/OcpBuild" },
+            { "$ref": "#/$defs/OcpWheel" }
+          ]
         }
       },
       "additionalProperties": false
@@ -173,6 +163,26 @@
     "model"
   ],
   "$defs": {
+    "OcpBuild": {
+      "type": "string",
+      "enum": ["pypi", "minimal"]
+    },
+    "OcpWheel": {
+      "type": "object",
+      "required": ["url", "sha256"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL of the wheel"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "SHA256 checksum of the wheel",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
     "ModelConfig": {
       "type": "object",
       "properties": {

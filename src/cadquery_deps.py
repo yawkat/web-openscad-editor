@@ -12,6 +12,7 @@ mapped to one of:
 
 import dataclasses
 import json
+import os
 import re
 import subprocess
 import tomllib
@@ -39,6 +40,10 @@ STUB_PACKAGES = (
 # Native OpenCascade bindings, replaced by the OCP.wasm build.
 OCP_PACKAGES = {"cadquery-ocp", "cadquery-ocp-novtk", "cadquery-ocp-proxy"}
 OCP_WASM_PACKAGE = "cadquery-ocp-novtk-OCP.wasm"
+# GitHub repository with OCP.wasm builds reduced to what CadQuery uses
+# (ocp-wheel = "minimal"). Each release is built for one cadquery-ocp and
+# cadquery version; its wheel version is "<OCP version>+cadquery<version>".
+MINIMAL_OCP_REPOSITORY = "yawkat/ocp-wasm-cadquery"
 
 # Pyodide packages that CadQuery imports at module level but only needs for
 # constraint solving and NURBS fitting. They are loaded on first use.
@@ -113,9 +118,16 @@ def pyodide_lock_url(pyodide_version: str) -> str:
     return PYODIDE_CDN.format(version=pyodide_version) + "pyodide-lock.json"
 
 
-def _fetch_json(url: str) -> typing.Any:
-    with urllib.request.urlopen(url) as response:
+def _fetch_json(url: str, headers: typing.Mapping[str, str] | None = None) -> typing.Any:
+    request = urllib.request.Request(url, headers=dict(headers or {}))
+    with urllib.request.urlopen(request) as response:
         return json.load(response)
+
+
+def _wheel_tags_match(filename: str, abi_version: str, python_tag: str) -> bool:
+    platform_tag = f"pyemscripten_{abi_version}_wasm32"
+    _, _, _, tags = parse_wheel_filename(filename)
+    return any(t.platform == platform_tag and t.interpreter == python_tag for t in tags)
 
 
 def find_ocp_wasm_wheel(
@@ -131,7 +143,6 @@ def find_ocp_wasm_wheel(
     the first four release components.
     """
     wanted = Version(locked_version).release[:4]
-    platform_tag = f"pyemscripten_{abi_version}_wasm32"
     candidates: list[tuple[Version, Wheel]] = []
     available: set[str] = set()
     for version_text, files in pypi_json.get("releases", {}).items():
@@ -142,8 +153,7 @@ def find_ocp_wasm_wheel(
             filename = file["filename"]
             if not filename.endswith(".whl") or file.get("yanked"):
                 continue
-            _, _, _, tags = parse_wheel_filename(filename)
-            if not any(t.platform == platform_tag and t.interpreter == python_tag for t in tags):
+            if not _wheel_tags_match(filename, abi_version, python_tag):
                 continue
             available.add(version_text)
             if version.release[:4] == wanted:
@@ -158,6 +168,77 @@ def find_ocp_wasm_wheel(
             f"to a matching version in your uv project, or change cadquery.pyodide-version."
         )
     return max(candidates, key=lambda c: c[0])[1]
+
+
+def find_minimal_ocp_wheel(
+    ocp_version: str,
+    cadquery_version: str | None,
+    abi_version: str,
+    python_tag: str,
+    releases: typing.Sequence[typing.Mapping[str, typing.Any]],
+) -> Wheel:
+    """Find the newest minimal OCP.wasm build for the locked versions.
+
+    ``releases`` is the GitHub releases list of MINIMAL_OCP_REPOSITORY. A
+    build matches on the OCP version (like :func:`find_ocp_wasm_wheel`), the
+    cadquery version it was reduced for, and the Pyodide ABI.
+    """
+    if cadquery_version is None:
+        raise DependencyError(
+            'ocp-wheel = "minimal" needs cadquery in the uv project, since the '
+            "minimal builds are made for a specific cadquery version."
+        )
+    wanted = (Version(ocp_version).release[:4], Version(cadquery_version))
+    candidates: list[tuple[str, Wheel]] = []
+    available: set[str] = set()
+    for release in releases:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        for asset in release.get("assets", []):
+            filename = asset["name"]
+            if not filename.endswith(".whl") or not _wheel_tags_match(
+                filename, abi_version, python_tag
+            ):
+                continue
+            version = parse_wheel_filename(filename)[1]
+            local = version.local or ""
+            if not local.startswith("cadquery"):
+                continue
+            built_for = Version(local.removeprefix("cadquery"))
+            available.add(f"cadquery-ocp {version.public} + cadquery {built_for}")
+            if (version.release[:4], built_for) != wanted:
+                continue
+            digest = asset.get("digest") or ""
+            if not digest.startswith("sha256:"):
+                raise DependencyError(f"Release asset {filename} has no sha256 digest")
+            candidates.append(
+                (
+                    release.get("published_at") or "",
+                    Wheel(filename, asset["browser_download_url"], digest.removeprefix("sha256:")),
+                )
+            )
+    if not candidates:
+        raise DependencyError(
+            f"No minimal OCP.wasm build (https://github.com/{MINIMAL_OCP_REPOSITORY}/releases) "
+            f"matches cadquery-ocp {ocp_version} and cadquery {cadquery_version} for Pyodide "
+            f"ABI {abi_version} ({python_tag}). Builds for this ABI: "
+            f"{'; '.join(sorted(available)) or 'none'}. Pin cadquery and cadquery-ocp to a "
+            f'matching version in your uv project, or use ocp-wheel = "pypi".'
+        )
+    # Rebuilds of the same versions: the latest release wins
+    return max(candidates, key=lambda c: c[0])[1]
+
+
+def fetch_minimal_ocp_releases() -> list[dict]:
+    headers = {"Accept": "application/vnd.github+json"}
+    # Optional, for GitHub's API rate limit (e.g. in GitHub Actions)
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return _fetch_json(
+        f"https://api.github.com/repos/{MINIMAL_OCP_REPOSITORY}/releases?per_page=100",
+        headers,
+    )
 
 
 def _pure_wheel(package: typing.Mapping[str, typing.Any]) -> Wheel | None:
@@ -178,12 +259,13 @@ def _pure_wheel(package: typing.Mapping[str, typing.Any]) -> Wheel | None:
 def resolve_browser_packages(
     pylock: typing.Mapping[str, typing.Any],
     pyodide_lock: typing.Mapping[str, typing.Any],
-    ocp_lookup: typing.Callable[[str], Wheel],
+    ocp_lookup: typing.Callable[[str, str | None], Wheel],
     pyodide_base_url: str,
 ) -> BrowserPackages:
     """Map the exported packages to what the browser loads.
 
-    ``ocp_lookup`` maps a native cadquery-ocp version to the OCP.wasm wheel.
+    ``ocp_lookup`` maps the locked cadquery-ocp and cadquery versions to the
+    OCP.wasm wheel.
     ``pyodide_base_url`` is where Pyodide's package files are hosted.
     """
     info = pyodide_lock["info"]
@@ -197,7 +279,8 @@ def resolve_browser_packages(
     deferred: list[str] = []
     wheels: list[Wheel] = []
     warnings: list[str] = []
-    ocp_wheel: Wheel | None = None
+    ocp_version: str | None = None
+    cadquery_version: str | None = None
 
     for package in pylock.get("packages", []):
         marker = package.get("marker")
@@ -208,8 +291,10 @@ def resolve_browser_packages(
 
         if name in OCP_PACKAGES:
             if name != "cadquery-ocp-proxy":
-                ocp_wheel = ocp_lookup(version)
+                ocp_version = version
             continue
+        if name == "cadquery":
+            cadquery_version = version
         if name in STUB_PACKAGES:
             continue
         # Prefer Pyodide's build even for pure-Python packages, so that
@@ -243,7 +328,7 @@ def resolve_browser_packages(
             f"build, so it cannot run in the browser."
         )
 
-    if ocp_wheel is None:
+    if ocp_version is None:
         raise DependencyError(
             "The uv project does not depend on cadquery-ocp. Add cadquery to its dependencies."
         )
@@ -251,7 +336,7 @@ def resolve_browser_packages(
         pyodide_packages=sorted(eager),
         deferred_pyodide_packages=sorted(deferred),
         wheels=sorted(wheels, key=lambda w: w.filename),
-        ocp_wheel=ocp_wheel,
+        ocp_wheel=ocp_lookup(ocp_version, cadquery_version),
         warnings=warnings,
     )
 
@@ -273,25 +358,27 @@ def resolve_from_project(
     project_dir: str,
     pyodide_lock: typing.Mapping[str, typing.Any],
     pyodide_version: str,
-    ocp_wheel: Wheel | None = None,
+    ocp_wheel: Wheel | typing.Literal["pypi", "minimal"] = "pypi",
 ) -> BrowserPackages:
     """Resolve the browser packages of a uv project.
 
-    ``ocp_wheel`` replaces the OCP.wasm release from PyPI, e.g. with a smaller
-    CadQuery-only build.
+    ``ocp_wheel`` selects the OCP.wasm build: the release from PyPI matching
+    the locked cadquery-ocp, the minimal build matching the locked
+    cadquery-ocp and cadquery (see MINIMAL_OCP_REPOSITORY), or a given wheel.
     """
     info = pyodide_lock["info"]
     tag = python_tag(info["python"])
-    pypi_cache: dict[str, typing.Any] = {}
 
-    def ocp_lookup(version: str) -> Wheel:
-        if ocp_wheel is not None:
+    def ocp_lookup(version: str, cadquery_version: str | None) -> Wheel:
+        if isinstance(ocp_wheel, Wheel):
             return ocp_wheel
-        if "json" not in pypi_cache:
-            pypi_cache["json"] = _fetch_json(
-                f"https://pypi.org/pypi/{OCP_WASM_PACKAGE}/json"
+        if ocp_wheel == "minimal":
+            return find_minimal_ocp_wheel(
+                version, cadquery_version, info["abi_version"], tag,
+                fetch_minimal_ocp_releases(),
             )
-        return find_ocp_wasm_wheel(version, info["abi_version"], tag, pypi_cache["json"])
+        pypi = _fetch_json(f"https://pypi.org/pypi/{OCP_WASM_PACKAGE}/json")
+        return find_ocp_wasm_wheel(version, info["abi_version"], tag, pypi)
 
     return resolve_browser_packages(
         export_pylock(project_dir),

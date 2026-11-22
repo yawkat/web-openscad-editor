@@ -42,8 +42,8 @@ OCP_WHEEL = Wheel("ocp.whl", "https://files.example/ocp.whl", "ef" * 32)
 def resolve(packages):
     looked_up = []
 
-    def lookup(version):
-        looked_up.append(version)
+    def lookup(version, cadquery_version):
+        looked_up.append((version, cadquery_version))
         return OCP_WHEEL
 
     result = cadquery_deps.resolve_browser_packages(
@@ -69,7 +69,7 @@ def test_classification():
             {**native("numpy", "2.4.0"), "marker": "python_full_version < '3.12'"},
         ]
     )
-    assert looked_up == ["7.9.3.1.1"]
+    assert looked_up == [("7.9.3.1.1", "2.8.0")]
     assert result.ocp_wheel == OCP_WHEEL
     assert result.pyodide_packages == ["numpy", "pydantic_core"]
     assert result.deferred_pyodide_packages == ["scipy"]
@@ -111,6 +111,44 @@ def test_find_ocp_wasm_wheel():
     assert "7.9.3.1.post2" in wheel.filename
     with pytest.raises(cadquery_deps.DependencyError, match="7.9.3.1.post2, 8.0.1.1.post1"):
         cadquery_deps.find_ocp_wasm_wheel("7.8.0", "2026_0", "cp314", pypi)
+
+
+def minimal_release(tag, filenames, published_at="2026-11-01T00:00:00Z", **extra):
+    return {
+        "tag_name": tag,
+        "published_at": published_at,
+        "assets": [
+            {
+                "name": name,
+                "browser_download_url": f"https://github.example/{tag}/{name}",
+                "digest": f"sha256:{digest * 32}",
+            }
+            for name, digest in filenames
+        ],
+        **extra,
+    }
+
+
+def test_find_minimal_ocp_wheel():
+    wheel = "cadquery_ocp_novtk_ocp_wasm-{}-cp314-cp314-pyemscripten_2026_0_wasm32.whl"
+    releases = [
+        minimal_release("draft", [(wheel.format("7.9.3.1+cadquery2.8.0"), "00")], "2026-11-30T00:00:00Z", draft=True),
+        minimal_release("7.9.3.1-cadquery2.9.0", [(wheel.format("7.9.3.1+cadquery2.9.0"), "99")]),
+        minimal_release("7.9.3.1-cadquery2.8.0-2", [(wheel.format("7.9.3.1+cadquery2.8.0"), "22"), (wheel.format("7.9.3.1+cadquery2.8.0") + ".sha256", "33")], "2026-11-20T00:00:00Z"),
+        minimal_release("7.9.3.1-cadquery2.8.0", [(wheel.format("7.9.3.1+cadquery2.8.0"), "11")], "2026-11-10T00:00:00Z"),
+        minimal_release("old-abi", [("cadquery_ocp_novtk_ocp_wasm-7.9.3.1+cadquery2.8.0-cp313-cp313-pyemscripten_2025_0_wasm32.whl", "44")], "2026-11-25T00:00:00Z"),
+    ]
+    # Latest rebuild for the locked versions
+    found = cadquery_deps.find_minimal_ocp_wheel("7.9.3.1.1", "2.8.0", "2026_0", "cp314", releases)
+    assert found.sha256 == "22" * 32
+    assert found.url.startswith("https://github.example/7.9.3.1-cadquery2.8.0-2/")
+    # A dependency update without a matching build fails instead of falling back
+    with pytest.raises(cadquery_deps.DependencyError, match="cadquery 2.8.1.*cadquery-ocp 7.9.3.1 \\+ cadquery 2.8.0; cadquery-ocp 7.9.3.1 \\+ cadquery 2.9.0"):
+        cadquery_deps.find_minimal_ocp_wheel("7.9.3.1.1", "2.8.1", "2026_0", "cp314", releases)
+    with pytest.raises(cadquery_deps.DependencyError, match="cadquery-ocp 8.0.1"):
+        cadquery_deps.find_minimal_ocp_wheel("8.0.1", "2.8.0", "2026_0", "cp314", releases)
+    with pytest.raises(cadquery_deps.DependencyError, match="needs cadquery"):
+        cadquery_deps.find_minimal_ocp_wheel("7.9.3.1.1", None, "2026_0", "cp314", releases)
 
 
 def test_marker_environment():
