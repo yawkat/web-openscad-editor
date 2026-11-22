@@ -254,12 +254,13 @@ def prepare_runtime(
     pyodide_version: str,
     output_dir: str,
     output_subdir: str,
-    ocp_wheel: cadquery_deps.Wheel | None = None,
+    ocp_wheel: cadquery_deps.Wheel | typing.Literal["pypi", "minimal"] = "pypi",
     fonts: typing.Mapping[str, bytes] | None = None,
 ) -> dict[str, typing.Any]:
     """Resolve and bundle the browser runtime; return worker template variables.
 
-    ``ocp_wheel`` replaces the OCP.wasm release from PyPI. ``fonts`` (file
+    ``ocp_wheel`` selects the OCP.wasm build (see
+    :func:`cadquery_deps.resolve_from_project`). ``fonts`` (file
     name to content) are downloaded when a model first looks up a font.
     """
     pyodide_lock = load_pyodide_lock(pyodide_version)
