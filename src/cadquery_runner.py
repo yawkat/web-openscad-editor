@@ -235,10 +235,9 @@ def export_step(output_path: str) -> None:
     if isinstance(_last_result, cq.Assembly):
         _last_result.export(output_path, "STEP")
         return
-    shape = _to_shape(_last_result)
-    cq.Assembly(name=DEFAULT_PART_NAME).add(shape, name=DEFAULT_PART_NAME).export(
-        output_path, "STEP"
-    )
+    # A single-node assembly, so that the part keeps its name in the STEP file.
+    # (A child can't have the same name as the assembly.)
+    cq.Assembly(_to_shape(_last_result), name=DEFAULT_PART_NAME).export(output_path, "STEP")
 
 
 # Directory the worker writes the font download to. OpenCascade's font manager

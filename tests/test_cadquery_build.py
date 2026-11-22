@@ -1,4 +1,5 @@
 import io
+import marshal
 import sys
 import tarfile
 import zipfile
@@ -53,6 +54,9 @@ def test_build_site_packages(tmp_path, monkeypatch):
     assert "core_pkg-1.0.dist-info/METADATA" in core
     # Sourceless: no sources or __pycache__ directories
     assert not [n for n in core if n.endswith(".py") or "__pycache__" in n]
+    # Tracebacks show the installed path, not the build directory
+    code = marshal.loads(core["core_pkg/__init__.pyc"][16:])
+    assert code.co_filename == f"/lib/python{sys.version_info[0]}.{sys.version_info[1]}/site-packages/core_pkg/__init__.py"
 
     on_demand = _read_bundle(site.on_demand)
     assert set(on_demand) == {

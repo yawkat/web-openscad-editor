@@ -159,6 +159,10 @@ def _compile_sourceless(directories: typing.Sequence[str], python_version: str) 
         "-b",
         "--invalidation-mode",
         "unchecked-hash",
+        # File names in tracebacks: where Pyodide installs packages, not
+        # the temporary build directory
+        "-d",
+        f"/lib/python{major_minor}/site-packages",
         *directories,
     ]
     print("Running:", *command)
