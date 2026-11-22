@@ -1,3 +1,4 @@
+import pytest
 import model
 import config_generated
 
@@ -174,3 +175,60 @@ def test_preview_style_config():
         "model": [ { "file": "model.scad" } ]
     }))
     assert style_value(models[0]) == "colors"
+
+
+class CadqueryParamsLoader(MockParamsLoader):
+    def load_scad(self, declared_path: str) -> model.ParamSet:
+        raise AssertionError("OpenSCAD should not be used for CadQuery models")
+
+    def load_cadquery(self, declared_path: str) -> model.ParamSet:
+        return self.sets[declared_path]
+
+
+def test_cadquery_runtime():
+    ctx = model.ScadContext(
+        config_generated.ModelItem.model_validate({
+            "file": "bracket.py",
+            "runtime": "cadquery",
+            "param-metadata": {"lid.*": {"help-link": "https://example.com"}},
+        }),
+        CadqueryParamsLoader({"bracket.py": [
+            {"name": "width", "type": "number", "initial": 10, "group": "Parameters"},
+            {"name": "lid.height", "type": "number", "initial": 5, "group": "Lid"},
+        ]}),
+    )
+    assert ctx.runtime == config_generated.Runtime.cadquery
+    assert ctx.name() == "bracket"
+    assert [p.name for p in ctx.params] == ["width", "lid.height"]
+    assert ctx.params[1].group.name == "Lid"
+    # Wildcards match dotted names
+    assert ctx.params[1].metadata.help_link == "https://example.com"
+    assert ctx.params[0].metadata.help_link is None
+
+
+@pytest.mark.parametrize("option", ["additional-params", "additional-params-scad"])
+def test_cadquery_rejects_additional_params(option):
+    with pytest.raises(RuntimeError, match="not supported for CadQuery"):
+        model.ScadContext(
+            config_generated.ModelItem.model_validate({
+                "file": "bracket.py",
+                "runtime": "cadquery",
+                option: ["params"],
+            }),
+            CadqueryParamsLoader({"bracket.py": []}),
+        )
+
+
+def test_runtime_config():
+    configs = model.flatten_model_configs(config_generated.WebOpenscadEditorConfiguration.model_validate({
+        "model-template": { "cq": { "runtime": "cadquery" } },
+        "model": [
+            { "file": "model.py" },
+            { "file": "model.py", "template": ["cq"] },
+            { "file": "model.scad", "template": ["cq"], "runtime": "openscad" },
+        ]
+    }))
+    # No detection from the file extension
+    assert model.model_runtime(configs[0]) == config_generated.Runtime.openscad
+    assert model.model_runtime(configs[1]) == config_generated.Runtime.cadquery
+    assert model.model_runtime(configs[2]) == config_generated.Runtime.openscad

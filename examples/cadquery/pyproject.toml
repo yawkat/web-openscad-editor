@@ -1,0 +1,17 @@
+[project]
+name = "cadquery-example"
+version = "0.1.0"
+description = "Example CadQuery models for web-openscad-editor"
+requires-python = ">=3.11"
+dependencies = [
+    "cadquery==2.8.0",
+    "pydantic>=2",
+]
+
+[dependency-groups]
+dev = [
+    "ocp-vscode",
+]
+
+[tool.uv]
+package = false

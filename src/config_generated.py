@@ -77,6 +77,53 @@ class Openscad(BaseModel):
     )
 
 
+class OcpWheel(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    url: str = Field(..., description='URL of the wheel')
+    sha256: str = Field(
+        ..., description='SHA256 checksum of the wheel', pattern='^[0-9a-fA-F]{64}$'
+    )
+
+
+class Cadquery(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    tolerance: float | None = Field(
+        0.1,
+        description='Linear tessellation tolerance (mm) used for the preview and STL export',
+        gt=0.0,
+    )
+    angular_tolerance: float | None = Field(
+        0.2,
+        alias='angular-tolerance',
+        description='Angular tessellation tolerance (radians) used for the preview and STL export',
+        gt=0.0,
+    )
+    project: str | None = Field(
+        '.',
+        description='Directory of the uv project (pyproject.toml and uv.lock) that declares the dependencies of the CadQuery models, relative to the configuration file',
+    )
+    pyodide_version: str | None = Field(
+        '314.0.8',
+        alias='pyodide-version',
+        description='Pyodide version to run CadQuery models with. The OCP.wasm build of OpenCascade must be available for its ABI.',
+    )
+    ocp_wheel: OcpWheel | None = Field(
+        None,
+        alias='ocp-wheel',
+        description='Use this OCP.wasm wheel instead of the matching cadquery-ocp-novtk-OCP.wasm release from PyPI, e.g. a smaller CadQuery-only build',
+    )
+
+
+class Runtime(Enum):
+    openscad = 'openscad'
+    cadquery = 'cadquery'
+    NoneType_None = None
+
+
 class PreviewStyle(Enum):
     shaded = 'shaded'
     colors = 'colors'
@@ -148,13 +195,19 @@ class TabMetadata(BaseModel):
 
 class ModelConfig(BaseModel):
     template: list[str] | None = ['default']
+    runtime: Runtime | None = Field(
+        None,
+        description='Which runtime renders this model: OpenSCAD for .scad files, or CadQuery (Python, run in the browser with Pyodide). Defaults to openscad.',
+    )
     additional_params: list[str] | None = Field(
-        [], alias='additional-params', description='Array of parameter JSON files'
+        [],
+        alias='additional-params',
+        description='Array of parameter JSON files (OpenSCAD runtime only)',
     )
     additional_params_scad: list[str] | None = Field(
         [],
         alias='additional-params-scad',
-        description='Array of OpenSCAD files to load additional params from',
+        description='Array of OpenSCAD files to load additional params from (OpenSCAD runtime only)',
     )
     description_extra_html: str | None = Field(
         None, alias='description-extra-html', description='Per-file HTML description'
@@ -185,12 +238,14 @@ class ModelConfig(BaseModel):
     umami_track_export: list[str] | None = Field(
         None,
         alias='umami-track-export',
-        description='List of model parameter names to track when model is exported (STL download). Set to null (default) to disable tracking, or [] to track with no parameters.',
+        description='List of model parameter names to track when model is exported (STL or STEP download). Set to null (default) to disable tracking, or [] to track with no parameters.',
     )
 
 
 class ModelItem(ModelConfig):
-    file: str = Field(..., description='Path to SCAD file')
+    file: str = Field(
+        ..., description='Path to the model file (.scad for OpenSCAD, .py for CadQuery)'
+    )
     index: bool | None = Field(
         None,
         description='Whether this model should be generated at index.html in the output. Can be set at most for one model. By default, for projects with a single model this is true for that model, and for projects with multiple models this is false for all models. Can be set at most once per project. If a project has no model defined as the index, a bare-bones index with a list of all models will be generated.',
@@ -205,7 +260,11 @@ class WebOpenscadEditorConfiguration(BaseModel):
         default_factory=lambda: Openscad.model_validate({}),
         description='OpenSCAD-specific configuration',
     )
+    cadquery: Cadquery | None = Field(
+        default_factory=lambda: Cadquery.model_validate({}),
+        description='CadQuery-specific configuration. Only used by models with runtime = "cadquery".',
+    )
     model_template: dict[str, ModelConfig] | None = Field({}, alias='model-template')
     model: list[ModelItem] = Field(
-        ..., description='Input SCAD files to process', min_length=1
+        ..., description='Model files to process', min_length=1
     )

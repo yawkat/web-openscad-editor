@@ -4,11 +4,16 @@
  */
 
 import { trackUmamiEvent } from "./analytics.js";
+import { compileExpression } from "./scope.js";
 
 // ── camera helper ────────────────────────────────────────────────────
 
 function applyCameraFromSummary(camera, modelViewer) {
     if (!camera) {
+        // No camera information (e.g. CadQuery models): let model-viewer
+        // frame the model automatically.
+        modelViewer.removeAttribute("camera-orbit");
+        modelViewer.removeAttribute("camera-target");
         return;
     }
     const rotation = camera.rotation;
@@ -58,6 +63,73 @@ function showRenderError(dom, { summary, log }) {
     setRenderErrorVisible(dom, true);
 }
 
+/**
+ * Show a progress message on the model. With `bar` ({from, to, seconds}, sent
+ * by the CadQuery worker during the first render), a progress bar replaces
+ * the spinner: it starts at `from` and eases towards `to` over the step's
+ * expected duration. Without `bar`, the bar (if shown) keeps its position.
+ */
+function setProgress(dom, message, bar = null) {
+    if (!dom.renderProgress) {
+        return;
+    }
+    dom.renderProgress.textContent = message || "";
+    dom.renderProgress.classList.toggle("d-none", !message);
+    dom.modelLoadingBox.classList.toggle("has-text", !!message);
+    if (!message) {
+        dom.modelLoadingBar.classList.add("d-none");
+        dom.modelLoadingSpinner.classList.remove("d-none");
+        return;
+    }
+    if (!bar) {
+        return;
+    }
+    dom.modelLoadingSpinner.classList.add("d-none");
+    dom.modelLoadingBar.classList.remove("d-none");
+    dom.modelLoadingBar.setAttribute("aria-valuenow", String(Math.round(bar.from * 100)));
+    const fill = dom.modelLoadingBar.firstElementChild;
+    fill.style.transition = "none";
+    fill.style.width = `${bar.from * 100}%`;
+    // Apply the start position before animating from it
+    fill.getBoundingClientRect();
+    // Stop short of the next step, which jumps to its own start
+    fill.style.transition = `width ${bar.seconds}s ease-out`;
+    fill.style.width = `${(bar.from + 0.9 * (bar.to - bar.from)) * 100}%`;
+}
+
+// ── export file naming ───────────────────────────────────────────────
+
+function evaluateExportFileStem(exportFileStem, customization) {
+    if (exportFileStem === null) {
+        return "";
+    }
+    if (exportFileStem.js != null) {
+        try {
+            const evaluated = compileExpression(String(exportFileStem.js), customization)(customization);
+            return evaluated == null ? "" : String(evaluated);
+        } catch (e) {
+            console.warn("Failed to evaluate export-file-stem expression", e);
+            if (exportFileStem.fixed != null) {
+                return String(exportFileStem.fixed);
+            }
+            return "";
+        }
+    }
+    if (exportFileStem.fixed != null) {
+        return String(exportFileStem.fixed);
+    }
+    return "";
+}
+
+function downloadBytes(bytes, filename, mimeType) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
 // ── renderer factory ─────────────────────────────────────────────────
 
 /**
@@ -89,11 +161,29 @@ export function createRenderer({
     let isDirty = false;
     let lastResult = null;
     let isInitialRender = true;
+    let isExporting = false;
+
+    function setExporting(exporting) {
+        isExporting = exporting;
+        if (dom.downloadStepButton) {
+            dom.downloadStepButton.disabled = exporting || isRendering;
+        }
+        if (dom.downloadStepState) {
+            dom.downloadStepState.classList.toggle("d-none", !exporting);
+        }
+    }
+
+    function exportFilename(extension) {
+        return evaluateExportFileStem(exportFileStem, getCustomization()) + "." + extension;
+    }
 
     function setRendering(rendering) {
         isRendering = rendering;
         dom.renderButton.disabled = rendering;
         dom.downloadStlButton.disabled = rendering;
+        if (dom.downloadStepButton) {
+            dom.downloadStepButton.disabled = rendering || isExporting;
+        }
         if (rendering) {
             lastResult = null;
             dom.renderState.classList.remove("d-none");
@@ -103,6 +193,7 @@ export function createRenderer({
                 dom.modelLoadingOverlay.classList.remove("d-none");
             }
         } else {
+            setProgress(dom, "");
             dom.renderState.classList.add("d-none");
             dom.modelViewer.classList.remove("is-outdated");
             dom.modelViewer.setAttribute("aria-busy", "false");
@@ -118,12 +209,36 @@ export function createRenderer({
 
     // ── worker event handlers ───────────────────────────────────────
 
+    /**
+     * Start a helper worker that prepares one of the CadQuery worker's
+     * runtime files, and forward its result (see runtimeFilesWorker.js).
+     */
+    function startRuntimeFileHelper({ helperUrl, task, url }) {
+        const helper = new Worker(helperUrl, { type: "module" });
+        const finish = (message) => {
+            helper.terminate();
+            worker.postMessage(message);
+        };
+        helper.addEventListener("message", (event) => {
+            if (event.data.error) {
+                finish({ type: "runtime-file-failed", task, error: event.data.error });
+            } else {
+                finish({ type: "runtime-file", task, result: event.data.result });
+            }
+        });
+        helper.addEventListener("error", (event) => {
+            finish({ type: "runtime-file-failed", task, error: String(event.message || "helper worker failed") });
+        });
+        helper.postMessage({ task, url });
+    }
+
     worker.addEventListener("error", (event) => {
         console.error("Worker script error", event);
         showRenderError(dom, {
             summary: "Worker crashed while rendering",
             log: String(event && event.message ? event.message : event),
         });
+        setExporting(false);
         setRendering(false);
     });
 
@@ -133,6 +248,7 @@ export function createRenderer({
             summary: "Worker message error",
             log: String(event && event.message ? event.message : event),
         });
+        setExporting(false);
         setRendering(false);
     });
 
@@ -140,9 +256,44 @@ export function createRenderer({
         if (!event.data || typeof event.data !== "object") {
             return;
         }
+        if (event.data.type === "prepare-runtime-file") {
+            startRuntimeFileHelper(event.data);
+            return;
+        }
+        if (event.data.type === "progress") {
+            // The CadQuery runtime starts loading before the first render
+            // starts, so show progress regardless of the render state. It is
+            // cleared when the render finishes.
+            setProgress(dom, event.data.message, event.data.bar);
+            if (event.data.bar && dom.modelLoadingOverlay) {
+                dom.modelLoadingOverlay.classList.remove("d-none");
+            }
+            return;
+        }
+        if (event.data.type === "export-ok") {
+            setExporting(false);
+            downloadBytes(event.data.bytes, exportFilename(event.data.format), "application/octet-stream");
+            if (umamiTrackExport !== null) {
+                trackUmamiEvent("export-" + event.data.format, umamiTrackExport, getCustomization());
+            }
+            return;
+        }
+        if (event.data.type === "export-error") {
+            setExporting(false);
+            console.error("Export error", event.data);
+            showRenderError(dom, {
+                summary: "Export failed: " + (event.data.error || "unknown error"),
+                log: event.data.log || "",
+            });
+            return;
+        }
         if (event.data.type === "ok") {
             lastResult = event.data;
+            const previousUrl = dom.modelViewer.src;
             dom.modelViewer.src = URL.createObjectURL(new Blob([event.data.glb], { type: "model/gltf-binary" }));
+            if (previousUrl && previousUrl.startsWith("blob:")) {
+                URL.revokeObjectURL(previousUrl);
+            }
             applyCameraFromSummary(event.data.camera, dom.modelViewer);
             clearRenderError(dom);
             setRendering(false);
@@ -172,9 +323,16 @@ export function createRenderer({
     // ── render control ──────────────────────────────────────────────
 
     function startRender() {
+        if (isRendering) {
+            // Only one render runs at a time. Render the latest parameters
+            // once the current render is done, instead of queueing requests
+            // that the worker would work through one by one.
+            isDirty = true;
+            return;
+        }
+        const currentCustomization = getCustomization();
         clearRenderError(dom);
         setRendering(true);
-        const currentCustomization = getCustomization();
         const additionalParamNames = getAdditionalParamNames();
         const normalParams = {};
         const additionalParams = {};
@@ -195,12 +353,7 @@ export function createRenderer({
     }
 
     function triggerAutoRender() {
-        if (!dom.autoRenderCheckbox.checked) {
-            return;
-        }
-        if (isRendering) {
-            isDirty = true;
-        } else {
+        if (dom.autoRenderCheckbox.checked) {
             startRender();
         }
     }
@@ -224,36 +377,23 @@ export function createRenderer({
 
     dom.downloadStlButton.addEventListener("click", function () {
         if (lastResult != null) {
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(new Blob([lastResult.stl], { type: "application/octet-stream" }));
-            const customization = getCustomization();
-            let stem = "";
-            if (exportFileStem !== null) {
-                if (exportFileStem.js != null) {
-                    try {
-                        const expression = String(exportFileStem.js);
-                        const evaluator = new Function(...Object.keys(customization), "return " + expression);
-                        const evaluated = evaluator(...Object.values(customization));
-                        stem = evaluated == null ? "" : String(evaluated);
-                    } catch (e) {
-                        console.warn("Failed to evaluate export-file-stem expression", e);
-                        if (exportFileStem.fixed != null) {
-                            stem = String(exportFileStem.fixed);
-                        }
-                    }
-                } else if (exportFileStem.fixed != null) {
-                    stem = String(exportFileStem.fixed);
-                }
-            }
-            link.download = stem + ".stl";
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
+            downloadBytes(lastResult.stl, exportFilename("stl"), "application/octet-stream");
             if (umamiTrackExport !== null) {
                 trackUmamiEvent("export-stl", umamiTrackExport, getCustomization());
             }
         }
     });
+
+    if (dom.downloadStepButton) {
+        // STEP files are generated on demand from the last render, since
+        // exporting is slower than tessellating.
+        dom.downloadStepButton.addEventListener("click", function () {
+            if (lastResult != null && !isExporting) {
+                setExporting(true);
+                worker.postMessage({ type: "export", format: "step" });
+            }
+        });
+    }
 
     return {
         startRender,

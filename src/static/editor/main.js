@@ -296,7 +296,8 @@ function initProfilesUi() {
             }
             Object.assign(merged, sanitizeCustomization(profile.customization, config.defaultCustomization));
         }
-        customization.applyCustomization(merged, { reset: true });
+        // Part of initialization: the load handler renders once afterwards.
+        customization.applyCustomization(merged, { reset: true, notify: false });
     }
 
     renderList();

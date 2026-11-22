@@ -1,5 +1,6 @@
 import argparse
 import ast
+import functools
 import os
 import tempfile
 import typing
@@ -11,6 +12,9 @@ import shutil
 import hashlib
 import tomllib
 
+import cadquery_build
+import cadquery_deps
+import cadquery_schema
 import model
 import config_generated
 
@@ -40,7 +44,7 @@ def download(file: str, uri: str, sha256: typing.Optional[str] = None):
         pass
     urllib.request.urlretrieve(uri, file + ".tmp")
     if sha256:
-        with open(file, "rb") as f:
+        with open(file + ".tmp", "rb") as f:
             actual_sha256 = hashlib.sha256(f.read()).hexdigest()
         if actual_sha256 != sha256:
             raise RuntimeError(
@@ -81,25 +85,37 @@ def main():
             )
         )
 
-    download(
-        "build/openscad-wasm-web.zip",
-        "https://files.openscad.org/snapshots/OpenSCAD-"
-        + config.openscad.version
-        + "-WebAssembly-web.zip",
-        config.openscad.sha256_wasm_web,
-    )
-    download(
-        "build/openscad.AppImage",
-        "https://files.openscad.org/snapshots/OpenSCAD-"
-        + config.openscad.version
-        + "-x86_64.AppImage",
-        config.openscad.sha256_appimage,
-    )
-    os.chmod("build/openscad.AppImage", 0o755)
+    model_configs = model.flatten_model_configs(config)
+    runtimes = {model.model_runtime(c) for c in model_configs}
+    uses_openscad = config_generated.Runtime.openscad in runtimes
+    uses_cadquery = config_generated.Runtime.cadquery in runtimes
 
-    library_roots, library_include_paths = ensure_scad_libraries(
-        config.openscad.libraries
-    )
+    font_source = _font_source(config.openscad.font_source)
+
+    library_roots: typing.Dict[str, str] = {}
+    library_include_paths: list[str] = []
+    if uses_openscad:
+        download(
+            "build/openscad-wasm-web.zip",
+            "https://files.openscad.org/snapshots/OpenSCAD-"
+            + config.openscad.version
+            + "-WebAssembly-web.zip",
+            config.openscad.sha256_wasm_web,
+        )
+    # The AppImage is also the default source of fonts for CadQuery's text().
+    if uses_openscad or (uses_cadquery and font_source != "system"):
+        download(
+            "build/openscad.AppImage",
+            "https://files.openscad.org/snapshots/OpenSCAD-"
+            + config.openscad.version
+            + "-x86_64.AppImage",
+            config.openscad.sha256_appimage,
+        )
+        os.chmod("build/openscad.AppImage", 0o755)
+    if uses_openscad:
+        library_roots, library_include_paths = ensure_scad_libraries(
+            config.openscad.libraries
+        )
     openscad_env = os.environ.copy()
     if library_include_paths:
         existing_path = openscad_env.get("OPENSCADPATH")
@@ -107,7 +123,31 @@ def main():
             library_include_paths + ([existing_path] if existing_path else [])
         )
 
+    config_dir = os.path.dirname(args.config)
+    cadquery_project = os.path.join(
+        config_dir, config.cadquery.project if config.cadquery.project is not None else "."
+    )
+    cadquery_schemas: typing.Dict[str, typing.Any] = {}
+    if uses_cadquery:
+        cadquery_schemas = cadquery_build.extract_schemas(
+            cadquery_project,
+            [
+                os.path.join(config_dir, c.file)
+                for c in model_configs
+                if model.model_runtime(c) == config_generated.Runtime.cadquery
+            ],
+        )
+
     class ParamsLoaderImpl(model.ParamsLoader):
+        def load_cadquery(self, declared_path: str) -> model.ParamSet:
+            extracted = cadquery_schemas[os.path.abspath(declared_path)]
+            try:
+                return cadquery_schema.schema_to_params(
+                    extracted["schema"], extracted["defaults"]
+                )
+            except cadquery_schema.SchemaError as e:
+                raise SystemExit(f"{declared_path}: {e}")
+
         def load_json(self, declared_path: str) -> model.ParamSet:
             with open(declared_path, "r", encoding="utf-8") as f:
                 return json.load(f)["parameters"]
@@ -132,7 +172,7 @@ def main():
 
     # Create ScadContext objects from config inputs
     contexts: typing.List[model.ScadContext] = []
-    for inp in model.flatten_model_configs(config):
+    for inp in model_configs:
         inp.file = os.path.join(os.path.dirname(args.config), inp.file)
         inp.additional_params = [
             os.path.join(os.path.dirname(args.config), p) for p in inp.additional_params
@@ -142,9 +182,18 @@ def main():
 
     scad_root = os.path.commonpath([os.path.dirname(p.config.file) for p in contexts])
 
-    fs: typing.Dict[str, bytes] = {}
+    # Each runtime's worker only loads the files of its own models.
+    fs_by_runtime: typing.Dict[config_generated.Runtime, typing.Dict[str, bytes]] = {
+        runtime: {} for runtime in config_generated.Runtime if runtime.value is not None
+    }
     for context in contexts:
-        load_scad_recursively(context.config.file, scad_root, fs, library_roots)
+        runtime_fs = fs_by_runtime[context.runtime]
+        if context.runtime == config_generated.Runtime.cadquery:
+            load_python_recursively(context.config.file, scad_root, runtime_fs)
+        else:
+            load_scad_recursively(
+                context.config.file, scad_root, runtime_fs, library_roots
+            )
         context.relative = host_path_to_virtual(scad_root, context.config.file)
         if args.clean_urls:
             context.link = context.link.removesuffix(".html")
@@ -154,10 +203,14 @@ def main():
     # so without this, text() rendering emits:
     #   Fontconfig error: Cannot load default config file
     # and then falls back to missing fonts.
-    try:
-        add_default_fonts(config.openscad.font_source, fs)
-    except Exception as e:
-        print(f"Warning: failed to bundle fonts: {e}")
+    if uses_openscad:
+        try:
+            add_default_fonts(
+                font_source,
+                fs_by_runtime[config_generated.Runtime.openscad],
+            )
+        except Exception as e:
+            print(f"Warning: failed to bundle fonts: {e}")
     try:
         os.makedirs(args.output)
     except FileExistsError:
@@ -168,19 +221,20 @@ def main():
     )
     j2env.filters["json_dump"] = json.dumps
     cas_dir = "cas"
-    cas_fs: typing.Dict[str, str] = {}
     cas_out = os.path.join(args.output, cas_dir)
     os.makedirs(cas_out, exist_ok=True)
-    for virtual_path, content in fs.items():
-        digest = hashlib.sha256(content).hexdigest()
-        cas_fs[virtual_path] = digest
-        cas_file = os.path.join(cas_out, digest)
-        if not os.path.exists(cas_file):
-            with open(cas_file, "wb") as f:
-                f.write(content)
+    manifests: typing.Dict[config_generated.Runtime, typing.Dict[str, str]] = {}
+    for runtime, runtime_fs in fs_by_runtime.items():
+        manifest = manifests.setdefault(runtime, {})
+        for virtual_path, content in runtime_fs.items():
+            digest = hashlib.sha256(content).hexdigest()
+            manifest[virtual_path] = digest
+            cas_file = os.path.join(cas_out, digest)
+            if not os.path.exists(cas_file):
+                with open(cas_file, "wb") as f:
+                    f.write(content)
 
     variables_base: typing.Dict[str, typing.Any] = {
-        "fs_manifest": cas_fs,
         "fs_cas_dir": cas_dir,
         "config": config,
         "contexts": contexts,
@@ -214,13 +268,48 @@ def main():
 
     variables_base["static_dir"] = static_dir
 
-    worker_source = j2env.get_template("worker.js.jinja2").render(**variables_base)
-    worker_hash = hashlib.sha256(worker_source.encode("utf-8")).hexdigest()[:12]
-    worker_script_name = f"worker.{worker_hash}.js"
-    variables_base["worker_script_name"] = worker_script_name
-
-    with open(os.path.join(args.output, worker_script_name), "w") as f:
-        f.write(worker_source)
+    worker_script_names: typing.Dict[config_generated.Runtime, str] = {}
+    if uses_openscad:
+        worker_script_names[config_generated.Runtime.openscad] = write_worker(
+            j2env,
+            "worker.js.jinja2",
+            "worker",
+            args.output,
+            {
+                **variables_base,
+                "fs_manifest": manifests[config_generated.Runtime.openscad],
+            },
+        )
+    if uses_cadquery:
+        try:
+            cadquery_fonts = default_fonts(font_source)
+        except Exception as e:
+            print(f"Warning: failed to bundle fonts for CadQuery: {e}")
+            cadquery_fonts = {}
+        ocp_wheel = config.cadquery.ocp_wheel
+        runtime_variables = cadquery_build.prepare_runtime(
+            cadquery_project,
+            config.cadquery.pyodide_version or "314.0.8",
+            args.output,
+            "cadquery",
+            None
+            if ocp_wheel is None
+            else cadquery_deps.custom_wheel(ocp_wheel.url, ocp_wheel.sha256),
+            cadquery_fonts,
+        )
+        worker_script_names[config_generated.Runtime.cadquery] = write_worker(
+            j2env,
+            "cadquery_worker.js.jinja2",
+            "cadquery-worker",
+            args.output,
+            {
+                **variables_base,
+                **runtime_variables,
+                "fs_manifest": manifests[config_generated.Runtime.cadquery],
+            },
+        )
+    for ctx in contexts:
+        ctx.worker_script_name = worker_script_names[ctx.runtime]
 
     has_index = False
     for ctx in contexts:
@@ -251,7 +340,25 @@ def main():
     except FileNotFoundError:
         pass
 
-    shutil.unpack_archive("build/openscad-wasm-web.zip", args.output + "/openscad-wasm")
+    if uses_openscad:
+        shutil.unpack_archive(
+            "build/openscad-wasm-web.zip", args.output + "/openscad-wasm"
+        )
+
+
+def write_worker(
+    j2env: jinja2.Environment,
+    template: str,
+    stem: str,
+    output: str,
+    variables: typing.Mapping[str, typing.Any],
+) -> str:
+    source = j2env.get_template(template).render(**variables)
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+    name = f"{stem}.{digest}.js"
+    with open(os.path.join(output, name), "w") as f:
+        f.write(source)
+    return name
 
 
 pattern_include = re.compile(r"^\s*(?:include|use)\s+<(.+)>\s*$")
@@ -483,7 +590,138 @@ def load_scad_recursively(
                 fs[import_virtual_path] = f.read()
 
 
-def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):
+CADQUERY_IMPORTER_FUNCTIONS = {
+    "importStep",
+    "importStl",
+    "importDXF",
+    "importSvg",
+    "importBrep",
+    "importBin",
+}
+
+
+def _resolve_python_module(
+    base_dir: str, module: str
+) -> list[str]:
+    """Return the local files needed to import ``module`` from ``base_dir``.
+
+    This includes the ``__init__.py`` of every package on the way. Returns an
+    empty list if the module is not a local file (e.g. stdlib or a package).
+    """
+    parts = module.split(".") if module else []
+    files: list[str] = []
+    current = base_dir
+    for i, part in enumerate(parts):
+        candidate_dir = os.path.join(current, part)
+        candidate_file = candidate_dir + ".py"
+        last = i == len(parts) - 1
+        if os.path.isfile(os.path.join(candidate_dir, "__init__.py")):
+            files.append(os.path.join(candidate_dir, "__init__.py"))
+            current = candidate_dir
+            continue
+        if last and os.path.isfile(candidate_file):
+            files.append(candidate_file)
+            return files
+        if not last and os.path.isdir(candidate_dir):
+            # Namespace package (no __init__.py)
+            current = candidate_dir
+            continue
+        return []
+    return files
+
+
+def _python_string_argument(call: ast.Call, keyword: str) -> str | None:
+    if call.args:
+        first = call.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value
+        return None
+    for kw in call.keywords:
+        if kw.arg == keyword and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return kw.value.value
+    return None
+
+
+def python_dependencies(host_path: str, search_dir: str) -> list[str]:
+    """Find local files that a CadQuery script depends on.
+
+    ``search_dir`` is the directory of the main model, which is both the
+    import root (it is put on ``sys.path``) and the working directory when
+    the model runs.
+    """
+    with open(host_path, "rb") as f:
+        source = f.read()
+    try:
+        tree = ast.parse(source, host_path)
+    except SyntaxError:
+        return []
+    dependencies: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                dependencies.extend(_resolve_python_module(search_dir, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level > 0:
+                base_dir = os.path.dirname(host_path)
+                for _ in range(node.level - 1):
+                    base_dir = os.path.dirname(base_dir)
+            else:
+                base_dir = search_dir
+            module_files = _resolve_python_module(base_dir, node.module or "")
+            package_dir = (
+                os.path.join(base_dir, *node.module.split("."))
+                if node.module
+                else base_dir
+            )
+            if node.module and not module_files and not os.path.isdir(package_dir):
+                # Not a local module, e.g. stdlib or an installed package
+                continue
+            dependencies.extend(module_files)
+            for alias in node.names:
+                # `from package import submodule`
+                dependencies.extend(_resolve_python_module(package_dir, alias.name))
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else (
+                func.id if isinstance(func, ast.Name) else None
+            )
+            if name in CADQUERY_IMPORTER_FUNCTIONS:
+                path = _python_string_argument(node, "fileName")
+                if path is not None:
+                    asset = os.path.normpath(os.path.join(search_dir, path))
+                    if os.path.isfile(asset):
+                        dependencies.append(asset)
+    return dependencies
+
+
+def load_python_recursively(
+    host_path: str,
+    root: str,
+    fs: typing.Dict[str, bytes],
+    search_dir: str | None = None,
+):
+    if search_dir is None:
+        search_dir = os.path.dirname(host_path)
+    virtual_path = host_path_to_virtual(root, host_path)
+    if virtual_path in fs:
+        return
+    print(f"Including {virtual_path}")
+    with open(host_path, "rb") as f:
+        fs[virtual_path] = f.read()
+    if not host_path.endswith(".py"):
+        return
+    for dependency in python_dependencies(host_path, search_dir):
+        load_python_recursively(dependency, root, fs, search_dir)
+
+
+def _font_source(value) -> str:
+    """The configured font source as a string ("auto" if unset)."""
+    value = getattr(value, "value", value) or "auto"
+    return value if value in {"auto", "appimage", "system"} else "auto"
+
+
+def add_default_fonts(font_source: str, fs: typing.Dict[str, bytes]):
+    """Add the default fonts and a fontconfig config (for OpenSCAD) below /fonts."""
     # Provide a minimal fontconfig config file.
     # This is intentionally tiny (the heavy lifting is the font files).
     if "/fonts/fonts.conf" not in fs:
@@ -495,10 +733,14 @@ def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):
             b"  <cachedir>/tmp/fontconfig</cachedir>\n"
             b"</fontconfig>\n"
         )
+    for name, data in default_fonts(font_source).items():
+        fs["/fonts/" + name] = data
 
-    if font_source not in {"auto", "appimage", "system"}:
-        font_source = "auto"
 
+@functools.lru_cache
+def default_fonts(font_source: str) -> typing.Dict[str, bytes]:
+    """The default fonts, as {file name: content}."""
+    fs: typing.Dict[str, bytes] = {}
     # Default behavior:
     # - GitHub Action/CI: use the AppImage bundled with the action.
     # - Local runs: you can set OPENSCAD_FONT_SOURCE=system to embed
@@ -506,12 +748,13 @@ def add_default_fonts(font_source, fs: typing.Dict[str, bytes]):
     if font_source in {"auto", "appimage"}:
         try:
             add_fonts_from_appimage(fs)
-            return
+            return {k.removeprefix("/fonts/"): v for k, v in fs.items()}
         except Exception:
             if font_source == "appimage":
                 raise
 
     add_fonts_from_system(fs)
+    return {k.removeprefix("/fonts/"): v for k, v in fs.items()}
 
 
 def _collect_font_candidates(root: str) -> typing.List[str]:
@@ -603,7 +846,8 @@ def add_fonts_from_appimage(fs: typing.Dict[str, bytes]):
 
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(
-            [appimage_path, "--appimage-extract"],
+            # Absolute: the extraction runs in the temporary directory.
+            [os.path.abspath(appimage_path), "--appimage-extract"],
             check=True,
             cwd=tmp,
             stdout=subprocess.DEVNULL,
@@ -616,6 +860,8 @@ def add_fonts_from_appimage(fs: typing.Dict[str, bytes]):
         candidates: typing.List[str] = []
         for base in [
             os.path.join(squashfs_root, "usr", "share", "fonts"),
+            # Where OpenSCAD's AppImage keeps its Liberation fonts
+            os.path.join(squashfs_root, "usr", "share", "openscad", "fonts"),
             os.path.join(squashfs_root, "usr", "local", "share", "fonts"),
             os.path.join(squashfs_root, "usr", "lib", "fonts"),
         ]:

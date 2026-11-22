@@ -1,6 +1,6 @@
 # web-openscad-editor
 
-This repo contains a small generator that turns an OpenSCAD file into a self-contained web export (HTML + worker + OpenSCAD WASM). Try it out [here](https://web-openscad-editor.yawk.at/)!
+This repo contains a small generator that turns an OpenSCAD file into a self-contained web export (HTML + worker + OpenSCAD WASM). [CadQuery](https://github.com/CadQuery/cadquery) models are supported as well and run in the browser using [Pyodide](https://pyodide.org/) and [OCP.wasm](https://github.com/yeicor/OCP.wasm). Try it out [here](https://web-openscad-editor.yawk.at/)!
 
 Warning: Heavily vibe-coded.
 
@@ -84,7 +84,8 @@ version = "2026.01.19"
 sha256-appimage = "..."
 # SHA256 checksum of the OpenSCAD WASM web zip
 sha256-wasm-web = "..."
-# Where to load fonts from. These fonts will be embedded in the generator to render text.
+# Where to load fonts from. These fonts will be embedded in the generator to render text
+# (also for CadQuery models).
 # "appimage" will use the fonts included in the OpenSCAD AppImage.
 # "system" will use the fonts installed on the system.
 # "auto" will use the fonts included in the OpenSCAD AppImage if available, otherwise use 
@@ -100,13 +101,42 @@ enable-features = ["roof"]
 commit = "0123456789abcdef0123456789abcdef01234567"
 ```
 
+### CadQuery Settings
+
+Settings for [CadQuery models](#cadquery-models) are configured in the `[cadquery]` table. All settings are optional.
+
+```toml
+[cadquery]
+# Directory of the uv project (pyproject.toml + uv.lock) that declares the dependencies of
+# your CadQuery models, relative to the configuration file. The same project is used for
+# local development, and its lock decides which package versions run in the browser.
+project = "models"
+# Pyodide version that runs the models in the browser. The OCP.wasm build of OpenCascade
+# must be available for its ABI, so only change this together with cadquery-ocp.
+pyodide-version = "314.0.8"
+# Optional: use this OCP.wasm (OpenCascade) wheel instead of the matching release from PyPI,
+# e.g. a smaller build that only contains what CadQuery needs, which loads and renders faster.
+ocp-wheel = { url = "https://github.com/yawkat/ocp-wasm-cadquery/releases/download/...", sha256 = "..." }
+# Tessellation tolerances used for the preview and the STL export. Smaller values give
+# smoother curves but larger files. The linear tolerance is in mm, the angular one in radians.
+tolerance = 0.1
+angular-tolerance = 0.2
+```
+
+The generator exports the project's lock (`uv export --format pylock.toml`) and maps each package to the browser:
+
+- `cadquery-ocp` is replaced by the matching [OCP.wasm](https://github.com/yeicor/OCP.wasm) build.
+- Packages that [Pyodide](https://pyodide.org/) ships (numpy, pydantic, …) use Pyodide's version.
+- Other packages need a pure-Python wheel; they are bundled into the export, precompiled.
+- VTK, trame and numba are not available in the browser and are replaced by stubs.
+
 ### Model Files
 
 The individual models are defined using the ``[[model]]`` array. The `file` is the only required field.
 
 ```toml
 [[model]]
-# Path to the SCAD file, relative to the configuration file
+# Path to the model file (.scad or .py), relative to the configuration file
 file = "my-model.scad"
 # Whether this model should act as the landing page for the generated website. If this is 
 # `true`, the model will be available at "https://example.com/". If this is `false`, it 
@@ -116,6 +146,9 @@ file = "my-model.scad"
 # will act as the landing page; for multiple models, it will not. Only one model per 
 # project can act as the landing page.
 index = true
+# Which runtime renders the model: "openscad" (default) or "cadquery". The runtime is never
+# guessed from the file extension, so CadQuery models must set this explicitly.
+runtime = "openscad"
 ```
 
 ### Model Configuration
@@ -265,6 +298,85 @@ If multiple parameter metadata definitions match a parameter name, the metadata 
 
 Note that if there is no matching parameter for a metadata definition, even if the definition is a wildcard, an exception will be thrown. If you intentionally write a definition that does not always match a parameter, you can disable this check using `require-present = false`.
 
+### CadQuery Models
+
+Set `runtime = "cadquery"` to use a [CadQuery](https://github.com/CadQuery/cadquery) Python module as a model:
+
+```toml
+[cadquery]
+project = "models"
+
+[[model]]
+file = "models/enclosure.py"
+runtime = "cadquery"
+# Show the part colors of the returned assembly in the preview
+preview-style = "colors"
+```
+
+A model is a plain Python module with a `build` function. The [Pydantic](https://docs.pydantic.dev/) model annotated on its first parameter declares the customizer parameters, and `build` returns a `Workplane`, `Shape`, `Sketch` or `Assembly`. Return an `Assembly` to give parts names and colors in the preview and in STEP exports.
+
+```python
+from typing import Literal
+
+import cadquery as cq
+from pydantic import BaseModel, Field
+
+from common import PrintSettings  # share parameters between models by importing them
+
+
+class Lid(BaseModel):
+    show: bool = True
+    height: float = Field(6, ge=2, le=20, multiple_of=0.5, description="Lid height in mm")
+    color: Literal["steelblue", "tomato"] = Field(
+        "steelblue", json_schema_extra={"option-labels": {"tomato": "Tomato red"}}
+    )
+
+
+class Params(PrintSettings):
+    size: tuple[float, float] = Field((80, 50), description="Outer width and depth in mm")
+    debug: bool = Field(False, json_schema_extra={"hidden": True})
+    # A nested model becomes a customizer tab
+    lid: Lid = Field(Lid(), title="Lid")
+
+
+def build(p: Params) -> cq.Assembly:
+    ...
+
+
+if __name__ == "__main__":
+    # Local development: run it with `uv run python enclosure.py`, or use ocp_vscode
+    build(Params()).export("enclosure.step")
+```
+
+The Pydantic schema is mapped to the customizer:
+
+- `bool`, `int`, `float` and `str` fields become inputs. `ge`/`le`/`multiple_of` set the range and step, and `description` the help text.
+- `Literal[...]` fields become dropdowns. `json_schema_extra={"option-labels": {...}}` sets display names.
+- Fixed-length tuples of numbers, e.g. `tuple[float, float]`, become vector inputs.
+- A top-level field whose type is another model becomes a tab named after the field's `title`. Its parameters have dotted names like `lid.height`.
+- `json_schema_extra={"hidden": True}` hides a field.
+
+Dotted names are used everywhere parameters are referenced: in `param-metadata` (wildcards like `"lid.*"` work), `umami-track-*`, and in JavaScript expressions, where they are nested objects:
+
+```toml
+[model.tab-metadata."Lid"]
+control-boolean = "lid.show"
+
+[model.param-metadata."lid.*"]
+display-condition = {js = "lid.show"}
+
+[model.param-metadata."lid.show"]
+display-condition = {fixed = false}
+```
+
+`additional-params` and `additional-params-scad` are not supported for CadQuery models. Share parameters by importing a common Pydantic model instead.
+
+Local modules imported by the model (e.g. `from helpers import rounded_box`) and files loaded with `cq.importers.importStep("parts/bolt.step")` (and the other importers) are bundled automatically. Imports are resolved relative to the model's directory, which is also the working directory while the model runs. At build time, the generator imports the models in the uv project's environment to read their parameters.
+
+In addition to "Save STL", CadQuery models get a "Save STEP" button that exports the exact geometry with part names and colors. The first render takes a while (around 10 seconds) because the Python runtime and OpenCascade have to load; later renders reuse them and are fast. Assembly constraint solving (`Assembly.solve()`) does not work in the browser, because Pyodide's casadi build lacks the IPOPT solver.
+
+Text (`text()`) uses the same fonts as OpenSCAD models (see `font-source` under [OpenSCAD settings](#openscad-settings)). They are downloaded the first time a model renders text. CadQuery's default font, Arial, uses Liberation Sans, and Times New Roman and Courier New use Liberation Serif and Liberation Mono.
+
 ### Model Templates
 
 To reuse model configuration, you can define a model template:
@@ -320,7 +432,7 @@ Templates can also inherit from other templates, but they must be declared in in
 
 ### Analytics
 
-If you want to learn how your users configure your models, you can enable analytics tracking for specific parameters using [Umami](https://umami.is/). Whenever a user clicks the "Render" or "Export STL" button, a [custom event](https://umami.is/docs/track-events) is sent to Umami. The event properties will contain the configured values of the specified parameters.
+If you want to learn how your users configure your models, you can enable analytics tracking for specific parameters using [Umami](https://umami.is/). Whenever a user clicks the "Render", "Save STL" or "Save STEP" button, a [custom event](https://umami.is/docs/track-events) (`render`, `export-stl` or `export-step`) is sent to Umami. The event properties will contain the configured values of the specified parameters.
 
 To ensure user privacy, only track parameters that have few configurable values, such as booleans or enums.
 
@@ -334,8 +446,8 @@ file = "my-model.scad"
 # Whenever the user clicks the "Render" button, track the current value of the "magnets" 
 # parameter
 umami-track-render = ["magnets"]
-# Whenever the user clicks the "Export STL" button, track the current value of the 
-# "magnets" and "magnet_style" parameters
+# Whenever the user clicks the "Save STL" (or "Save STEP") button, track the current value 
+# of the "magnets" and "magnet_style" parameters
 umami-track-export = ["magnets", "magnet_style"]
 ```
 
@@ -352,4 +464,4 @@ The configuration classes are auto-generated from `config-schema.json` using Pyd
 
 ## License
 
-While this repository is MIT-licensed, it bundles OpenSCAD binaries which are licensed under GPL. If you use this project, you must also follow the OpenSCAD terms.
+While this repository is MIT-licensed, it bundles OpenSCAD binaries which are licensed under GPL. If you use this project, you must also follow the OpenSCAD terms. Exports with CadQuery models additionally bundle CadQuery (Apache 2.0) and OCP/OpenCascade (LGPL 2.1 with exception), and load Pyodide (MPL 2.0).

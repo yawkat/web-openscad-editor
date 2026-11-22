@@ -86,3 +86,53 @@ def test_load_scad_recursively_does_not_recurse_into_imports(tmp_path):
     assert "/model.scad" in fs
     assert "/imported.scad" in fs
     assert "/nested.scad" not in fs
+
+
+def test_load_python_recursively(tmp_path):
+    from generate import load_python_recursively
+
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "helpers.py").write_text("from shared import x\nimport os\n")
+    (model_dir / "shared.py").write_text("x = 1\n")
+    package = model_dir / "parts"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    (package / "bolt.py").write_text("from . import nut\n")
+    (package / "nut.py").write_text("")
+    (package / "unused.py").write_text("")
+    namespace = model_dir / "lib" / "shapes"
+    namespace.mkdir(parents=True)
+    (namespace / "tab.py").write_text("")
+    (namespace / "slot.py").write_text("")
+    (model_dir / "assets").mkdir()
+    (model_dir / "assets" / "thing.step").write_bytes(b"step")
+    (model_dir / "assets" / "outline.dxf").write_bytes(b"dxf")
+    model_file = model_dir / "model.py"
+    model_file.write_text(
+        "import cadquery as cq\n"
+        "import math\n"
+        "import helpers\n"
+        "from parts import bolt\n"
+        "import lib.shapes.tab\n"
+        "from lib.shapes import slot\n"
+        "a = cq.importers.importStep('assets/thing.step')\n"
+        "b = importDXF(fileName='assets/outline.dxf')\n"
+        "c = cq.importers.importStep('assets/missing.step')\n"
+    )
+
+    fs = {}
+    load_python_recursively(str(model_file), str(model_dir), fs)
+
+    assert sorted(fs) == [
+        "/assets/outline.dxf",
+        "/assets/thing.step",
+        "/helpers.py",
+        "/lib/shapes/slot.py",
+        "/lib/shapes/tab.py",
+        "/model.py",
+        "/parts/__init__.py",
+        "/parts/bolt.py",
+        "/parts/nut.py",
+        "/shared.py",
+    ]

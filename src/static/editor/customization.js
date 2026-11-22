@@ -8,6 +8,8 @@
  * refresh, auto-render trigger) happen consistently.
  */
 
+import { compileExpression } from "./scope.js";
+
 const DEBUG_CUSTOMIZATION_HASH = false;
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -55,7 +57,7 @@ export function createCustomizationController({ defaultCustomization, additional
         const js = elem.dataset.displayCondition;
         conditionalElements.push({
             element: elem,
-            predicate: new Function(...Object.keys(currentCustomization), "return " + js),
+            predicate: compileExpression(js, currentCustomization),
         });
     }
 
@@ -131,7 +133,7 @@ export function createCustomizationController({ defaultCustomization, additional
             }
         }
         for (const elem of conditionalElements) {
-            elem.element.style.display = elem.predicate(...Object.values(currentCustomization)) ? "" : "none";
+            elem.element.style.display = elem.predicate(currentCustomization) ? "" : "none";
         }
     }
 
@@ -217,7 +219,14 @@ export function createCustomizationController({ defaultCustomization, additional
         }
     }
 
-    function applyCustomization(customization, { reset = true } = {}) {
+    /**
+     * @param {object} customization - values to apply
+     * @param {object} [options]
+     * @param {boolean} [options.reset] - reset all other values to their defaults
+     * @param {boolean} [options.notify] - call onChanged (and so auto-render).
+     *     Initialization passes false and renders once when it is done.
+     */
+    function applyCustomization(customization, { reset = true, notify = true } = {}) {
         if (reset) {
             resetCurrentCustomizationToDefault();
         }
@@ -230,7 +239,9 @@ export function createCustomizationController({ defaultCustomization, additional
         }
         applyCustomizationToInputs();
         updateUrlFromCustomization();
-        onChanged();
+        if (notify) {
+            onChanged();
+        }
     }
 
     function setValue(name, value) {

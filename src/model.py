@@ -18,6 +18,10 @@ class ParamsLoader(abc.ABC):
     def load_scad(self, declared_path: str) -> ParamSet:
         pass
 
+    def load_cadquery(self, declared_path: str) -> ParamSet:
+        """Parameters of a CadQuery model (see cadquery_schema.py)."""
+        raise NotImplementedError("This loader does not support CadQuery models")
+
     def load_and_merge(self, config: config_generated.ModelItem) -> ParamSet:
         combined = []
 
@@ -35,13 +39,31 @@ class ParamsLoader(abc.ABC):
             for p in params:
                 add(p, origin)
 
-        add_all(self.load_scad(config.file), "own")
+        if model_runtime(config) == config_generated.Runtime.cadquery:
+            if config.additional_params or config.additional_params_scad:
+                raise RuntimeError(
+                    f"additional-params and additional-params-scad are not supported for CadQuery models ('{config.file}'). "
+                    "Share parameters by importing a common Pydantic model instead."
+                )
+            add_all(self.load_cadquery(config.file), "own")
+        else:
+            add_all(self.load_scad(config.file), "own")
         for path in config.additional_params:
             add_all(self.load_json(path), "additional")
         for path in config.additional_params_scad:
             add_all(self.load_scad(path), "additional")
 
         return combined
+
+def model_runtime(config: config_generated.ModelConfig) -> config_generated.Runtime:
+    runtime = config.runtime
+    if runtime is None:
+        return config_generated.Runtime.openscad
+    runtime = config_generated.Runtime(runtime)
+    if runtime.value is None:
+        return config_generated.Runtime.openscad
+    return runtime
+
 
 class Parameter:
     def __init__(self, definition: typing.Mapping[str, typing.Any], group: "GroupInfo"):
@@ -90,6 +112,7 @@ class ScadContext:
         self.html_file = self.name() + ".html"
         self.link = self.html_file
         self.relative: str = ""  # Set later in main()
+        self.worker_script_name: str = ""  # Set later in main()
 
         definitions = loader.load_and_merge(config)
         groups = {}
@@ -108,7 +131,11 @@ class ScadContext:
                 raise RuntimeError(f"Parameter metadata '{key}' not found in scad files for '{self.config.file}'. If this is intentional, add require_present=false to the metadata.")
 
     def name(self):
-        return os.path.basename(self.config.file).removesuffix(".scad")
+        return os.path.splitext(os.path.basename(self.config.file))[0]
+
+    @property
+    def runtime(self) -> config_generated.Runtime:
+        return model_runtime(self.config)
 
     def group(self, name: str) -> "GroupInfo":
         return GroupInfo(self, name)

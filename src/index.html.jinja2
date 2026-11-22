@@ -61,6 +61,28 @@
             pointer-events: none;
             z-index: 10;
         }
+
+        #model-loading-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            max-width: calc(100% - 2rem);
+            padding: 0.75rem 1rem;
+            border-radius: var(--bs-border-radius-lg);
+            text-align: center;
+        }
+
+        /* Readable on top of the model */
+        #model-loading-box.has-text {
+            background: rgba(var(--bs-body-bg-rgb), 0.85);
+            box-shadow: var(--bs-box-shadow-sm);
+        }
+
+        #model-loading-bar {
+            width: 20rem;
+            max-width: 100%;
+        }
         @media only screen and (max-width: 992px) {
             body {
                 display: block;
@@ -169,7 +191,8 @@
     <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
     <script>
         window.__WOSE_MODEL__ = {
-            workerUrl: "./{{ worker_script_name }}",
+            workerUrl: "./{{ ctx.worker_script_name }}",
+            modelRuntime: {{ ctx.runtime.value | json_dump }},
             defaultCustomization: {
                 {% for entry in ctx.params -%}
                     "{{ entry.name }}":
@@ -202,8 +225,15 @@
     <!-- the environment image disables the default lighting -->
     <model-viewer id="model" camera-controls interaction-prompt="none" orientation="0deg -90deg 0deg"
                   environment-image="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAIABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AJVAA//Z"></model-viewer>
-    <div id="model-loading-overlay" class="d-none" aria-hidden="true">
-        <span class="spinner-border" aria-hidden="true"></span>
+    <div id="model-loading-overlay" class="d-none">
+        <div id="model-loading-box">
+            <span id="model-loading-spinner" class="spinner-border" aria-hidden="true"></span>
+            <div id="model-loading-bar" class="progress d-none" role="progressbar" aria-label="Loading"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-bar"></div>
+            </div>
+            <div id="render-progress" class="small text-body-secondary d-none" aria-live="polite"></div>
+        </div>
     </div>
     <div id="controls">
         <button id="render" type="button" class="btn btn-secondary">Render<span id="render-state" class="d-none">ing… <span
@@ -214,6 +244,10 @@
         </label>
         <button type="button" class="btn btn-secondary" data-bs-toggle="modal" data-bs-target="#profiles-modal">Profiles</button>
         <button id="download-stl" type="button" class="btn btn-primary">Save STL</button>
+        {% if ctx.runtime.value == "cadquery" %}
+        <button id="download-step" type="button" class="btn btn-primary" title="Save as STEP (exact CAD geometry, with part names and colors)">Save STEP<span id="download-step-state" class="d-none"> <span
+                class="spinner-border spinner-border-sm" aria-hidden="true"></span></span></button>
+        {% endif %}
         <div id="render-error" class="alert alert-danger mt-2 d-none" role="alert">
             <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
                 <div>
@@ -280,7 +314,7 @@
             {% endif %}
             {% set state.current_group = param.group %}
             {%- if state.current_group.config.control_boolean -%}
-                <label class="group-header"><h3><span class="group-header-control"><input class="customizer" type="checkbox" attr-name="{{ param.name }}"></span>
+                <label class="group-header"><h3><span class="group-header-control"><input class="customizer" type="checkbox" attr-name="{{ state.current_group.config.control_boolean }}"></span>
                     {{- state.current_group.name -}}
                     {%- if state.current_group.config.help_link %}
                         {{ help_link(state.current_group.config.help_link) }}
@@ -302,7 +336,8 @@
         {% if param.metadata.display_condition.fixed %}
         <div class="col-12"{% if param.metadata.display_condition.js %} data-display-condition="{{ param.metadata.display_condition.js }}"{% endif %}>
             <label for="{{ pid }}">
-                {% for piece in param.name.split("_") -%}
+                {#- Nested CadQuery parameters (e.g. "lid.height") show their last segment; the tab names the rest. #}
+                {% for piece in param.name.split(".")[-1].split("_") -%}
                     {{ piece }}
                     {%- if not loop.last %}<span class="param_underscore">_</span>{% endif -%}
                 {%- endfor %}
