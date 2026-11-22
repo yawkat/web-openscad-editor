@@ -8,7 +8,7 @@ commit = "fbcdfdd511b6abfde93c43c8f85c2bd24ee7a02d"
 # uv project (pyproject.toml + uv.lock) with the CadQuery models' dependencies
 project = "examples/cadquery"
 # OCP.wasm reduced to the modules CadQuery uses (https://github.com/yawkat/ocp-wasm-cadquery)
-ocp-wheel = { url = "https://github.com/yawkat/ocp-wasm-cadquery/releases/download/7.9.3.1-cadquery2.8.0/cadquery_ocp_novtk_ocp_wasm-7.9.3.1%2Bcadquery2.8.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl", sha256 = "6e2b6fbf6cdf1d47ba03fa73eef0bfd817a63ed193ccc03c0232b40d353fb0b9" }
+ocp-wheel = { url = "https://github.com/yawkat/ocp-wasm-cadquery/releases/download/7.9.3.1-cadquery2.8.0-2/cadquery_ocp_novtk_ocp_wasm-7.9.3.1%2Bcadquery2.8.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl", sha256 = "c49006b18d598a764240ffc562de13415a5de5710ab1941befdee24143d59298" }
 
 [[model]]
 file = "test.scad"
